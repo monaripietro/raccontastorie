@@ -1,1 +1,53 @@
 @import "tailwindcss";
+
+@theme {
+  --animate-pulse-slow: pulse-slow 3.2s ease-in-out infinite;
+  --animate-ping-slow: ping-slow 2.4s cubic-bezier(0, 0, 0.2, 1) infinite;
+  --animate-spin-slow: spin-slow 2.8s linear infinite;
+  --animate-wave: wave 1.8s ease-in-out infinite;
+
+  @keyframes pulse-slow {
+    0%,
+    100% {
+      opacity: 0.55;
+      transform: scale(0.97);
+    }
+    50% {
+      opacity: 1;
+      transform: scale(1.03);
+    }
+  }
+
+  @keyframes ping-slow {
+    0% {
+      transform: scale(1);
+      opacity: 0.8;
+    }
+    75%,
+    100% {
+      transform: scale(1.35);
+      opacity: 0;
+    }
+  }
+
+  @keyframes spin-slow {
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  @keyframes wave {
+    0%,
+    100% {
+      transform: scale(0.92);
+      opacity: 0.75;
+    }
+    50% {
+      transform: scale(1.08);
+      opacity: 1;
+    }
+  }
+}
