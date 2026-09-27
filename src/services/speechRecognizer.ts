@@ -135,6 +135,17 @@ class SpeechRecognizer {
     }
     recognition.onerror = (event) => {
       if (event.error === 'no-speech' || event.error === 'aborted') return
+      const fatal =
+        event.error === 'network' ||
+        event.error === 'service-not-allowed' ||
+        event.error === 'not-allowed'
+      if (fatal) {
+        this.deliverOnEnd = false
+        this.endHandler = null
+        this.active = false
+        this.recognition = null
+        this.clearSilenceTimer()
+      }
       onError?.(event.error)
     }
     recognition.onend = () => {

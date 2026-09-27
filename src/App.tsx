@@ -29,13 +29,16 @@ const FIRST_TOKEN_TIMEOUT_MS = 60000
 const GENERIC_ERROR_MESSAGE =
   'Scusa, mi sono distratto un attimo. Ripetimi cosa vuoi fare.'
 
+const STT_UNAVAILABLE_MESSAGE =
+  'Questo browser non riesce ad ascoltare la voce. Puoi comunque giocare: tocca una delle scelte sullo schermo!'
+
 export default function App() {
   const [screen, setScreen] = useState<Screen>('onboarding')
   const [llmStatus, setLlmStatus] = useState<LlmStatus>({ phase: 'idle' })
   const [orbState, setOrbState] = useState<OrbState>('idle')
   const [currentBeat, setCurrentBeat] = useState<StoryBeat | null>(null)
   const [lastTranscript, setLastTranscript] = useState('')
-  const [sttSupported] = useState(() => speechRecognizer.isSupported)
+  const [sttSupported, setSttSupported] = useState(() => speechRecognizer.isSupported)
 
   const storyEngineRef = useRef<StoryEngine | null>(null)
   const fallbackAttemptsRef = useRef(0)
@@ -73,8 +76,20 @@ export default function App() {
         onPartial: (transcript) => {
           if (transcript.length > 0) setLastTranscript(transcript)
         },
-        onError: () => {
+        onError: (error) => {
           listeningRef.current = false
+          if (
+            error === 'network' ||
+            error === 'service-not-allowed' ||
+            error === 'not-allowed'
+          ) {
+            setSttSupported(false)
+            setOrbState('idle')
+            if (screenRef.current === 'story') {
+              speechSynthesizer.speakSafely(STT_UNAVAILABLE_MESSAGE)
+            }
+            return
+          }
           setOrbState('idle')
         },
         handsFree: true,
@@ -135,6 +150,7 @@ export default function App() {
   ) {
     const engine = storyEngineRef.current
     if (!engine) return
+    if (!sttSupported && !option) return
     if (option) {
       engine.registerChoice(option.label, transcript)
       fallbackAttemptsRef.current = 0
@@ -321,7 +337,7 @@ export default function App() {
             <ChoiceButtons
               options={currentBeat.options}
               onChoose={handleChoiceButton}
-              disabled={orbState === 'speaking' || orbState === 'loading'}
+              disabled={!sttSupported ? false : orbState === 'speaking' || orbState === 'loading'}
             />
           )}
           {lastTranscript.length > 0 && (
