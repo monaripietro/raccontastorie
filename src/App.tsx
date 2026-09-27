@@ -50,14 +50,17 @@ export default function App() {
     speechSynthesizer.speak(text, { onEnd: () => setOrbState('idle') })
   }, [])
 
-  const startModelLoad = useCallback(() => {
+  const startModelLoad = useCallback((modelId: string) => {
     setLlmStatus({ phase: 'loading', progress: 0, text: '' })
-    llmEngine.load((status) => {
-      setLlmStatus(status)
-      if (status.phase === 'ready') {
-        setScreen('age-selection')
-      }
-    })
+    llmEngine.load(
+      (status) => {
+        setLlmStatus(status)
+        if (status.phase === 'ready') {
+          setScreen('age-selection')
+        }
+      },
+      modelId,
+    )
   }, [])
 
   const generateStep = useCallback(
