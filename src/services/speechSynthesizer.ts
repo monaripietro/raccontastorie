@@ -8,7 +8,21 @@ type QueueItem = {
   options: SpeakOptions
 }
 
-const PREFERRED_VOICES = ['google italiano', 'italiana', 'italiano']
+type VoiceLike = { name: string; lang: string }
+
+export function scoreItalianVoice(voice: VoiceLike): number {
+  const name = voice.name.toLowerCase()
+  const lang = voice.lang.toLowerCase()
+  if (!lang.startsWith('it')) return -1
+  let score = 0
+  if (name.includes('natural')) score += 100
+  if (name.includes('google italiano')) score += 80
+  if (name.includes('premium') || name.includes('enhanced')) score += 60
+  if (name.includes('online')) score += 40
+  if (name.includes('siri')) score += 20
+  if (lang.startsWith('it-it')) score += 10
+  return score
+}
 
 class SpeechSynthesizer {
   private queue: QueueItem[] = []
@@ -27,19 +41,25 @@ class SpeechSynthesizer {
   private pickItalianVoice(): SpeechSynthesisVoice | null {
     const voices = window.speechSynthesis.getVoices()
     if (voices.length === 0) return null
-    for (const preferred of PREFERRED_VOICES) {
-      const match = voices.find(
-        (v) => v.lang.toLowerCase().startsWith('it') && v.name.toLowerCase().includes(preferred),
-      )
-      if (match) return match
+    let best: SpeechSynthesisVoice | null = null
+    let bestScore = -1
+    for (const voice of voices) {
+      const score = scoreItalianVoice(voice)
+      if (score > bestScore) {
+        best = voice
+        bestScore = score
+      }
     }
-    return voices.find((v) => v.lang.toLowerCase().startsWith('it')) ?? null
+    return best
   }
 
   private ensureVoice(): SpeechSynthesisVoice | null {
     if (!this.voicesReady) {
-      this.italianVoice = this.pickItalianVoice()
-      this.voicesReady = true
+      const voice = this.pickItalianVoice()
+      if (voice) {
+        this.italianVoice = voice
+        this.voicesReady = true
+      }
     }
     return this.italianVoice
   }
@@ -81,7 +101,7 @@ class SpeechSynthesizer {
     const utterance = new SpeechSynthesisUtterance(item.text)
     utterance.lang = 'it-IT'
     utterance.rate = 0.95
-    utterance.pitch = 1.05
+    utterance.pitch = 1
     const voice = this.ensureVoice()
     if (voice) utterance.voice = voice
     utterance.onstart = () => item.options.onStart?.()
