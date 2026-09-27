@@ -11,25 +11,34 @@ export type ChatMessage = {
   content: string
 }
 
+export type GenerateStats = {
+  firstTokenMs: number
+  tokens: number
+  tokensPerSecond: number
+}
+
 type WorkerResponse =
   | { type: 'load-progress'; progress: number; text: string }
   | { type: 'ready' }
-  | { type: 'generated'; content: string }
+  | { type: 'first-token'; ms: number }
+  | { type: 'token'; delta: string; content: string }
+  | { type: 'generated'; content: string; stats: GenerateStats }
   | { type: 'reset-ok' }
   | { type: 'error'; error: string }
 
 type PendingGenerate = {
-  resolve: (content: string) => void
+  resolve: (value: { content: string; stats: GenerateStats | null }) => void
   reject: (error: Error) => void
+  onFirstToken?: (ms: number) => void
+  onToken?: (content: string) => void
 }
 
 export class LlmEngine {
   private worker: Worker | null = null
   private pendingGenerate: PendingGenerate | null = null
-  private pendingLoad: ((status: LlmStatus) => void) | null = null
 
-  get isReady(): boolean {
-    return this.worker !== null && this.pendingGenerate === null
+  get isGenerating(): boolean {
+    return this.pendingGenerate !== null
   }
 
   load(
@@ -54,15 +63,21 @@ export class LlmEngine {
           break
         }
         case 'ready': {
-          this.pendingLoad?.({ phase: 'ready' })
-          this.pendingLoad = null
           onStatus({ phase: 'ready' })
+          break
+        }
+        case 'first-token': {
+          this.pendingGenerate?.onFirstToken?.(data.ms)
+          break
+        }
+        case 'token': {
+          this.pendingGenerate?.onToken?.(data.content)
           break
         }
         case 'generated': {
           const pending = this.pendingGenerate
           this.pendingGenerate = null
-          pending?.resolve(data.content)
+          pending?.resolve({ content: data.content, stats: data.stats })
           break
         }
         case 'reset-ok': {
@@ -83,14 +98,21 @@ export class LlmEngine {
     }
     worker.onerror = (event) => {
       const error = event.message || 'Errore del Web Worker LLM'
+      const pending = this.pendingGenerate
       this.pendingGenerate = null
-      this.pendingLoad = null
+      pending?.reject(new Error(error))
       onStatus({ phase: 'error', error })
     }
     worker.postMessage({ type: 'load', modelId })
   }
 
-  async generate(messages: ChatMessage[]): Promise<string> {
+  async generate(
+    messages: ChatMessage[],
+    callbacks?: {
+      onFirstToken?: (ms: number) => void
+      onToken?: (content: string) => void
+    },
+  ): Promise<string> {
     const worker = this.worker
     if (!worker) {
       throw new Error('Il modello non è ancora pronto')
@@ -99,7 +121,12 @@ export class LlmEngine {
       throw new Error('Una generazione è già in corso')
     }
     return new Promise<string>((resolve, reject) => {
-      this.pendingGenerate = { resolve, reject }
+      this.pendingGenerate = {
+        resolve: (value) => resolve(value.content),
+        reject,
+        onFirstToken: callbacks?.onFirstToken,
+        onToken: callbacks?.onToken,
+      }
       worker.postMessage({ type: 'generate', messages })
     })
   }
@@ -112,7 +139,6 @@ export class LlmEngine {
     this.worker?.terminate()
     this.worker = null
     this.pendingGenerate = null
-    this.pendingLoad = null
   }
 }
 

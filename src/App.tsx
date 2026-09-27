@@ -5,6 +5,7 @@ import ChoiceButtons from './components/ChoiceButtons'
 import ModelOnboarding from './components/ModelOnboarding'
 import { useVoiceShortcut } from './hooks/useVoiceShortcut'
 import { llmEngine, type LlmStatus } from './services/llmEngine'
+import { DEFAULT_MODEL_ID } from './services/modelConfig'
 import {
   matchTranscriptToOptions,
   parseStoryBeat,
@@ -23,6 +24,8 @@ const FALLBACK_MESSAGE_1 =
   'Non ti ho sentito bene. Parla quando vedi l’anello verde, e dimmi cosa scegli.'
 const FALLBACK_MESSAGE_2 =
   'Puoi anche toccare uno dei pulsanti sullo schermo. Cosa preferisci?'
+const FIRST_TOKEN_TIMEOUT_MS = 60000
+
 const GENERIC_ERROR_MESSAGE =
   'Scusa, mi sono distratto un attimo. Ripetimi cosa vuoi fare.'
 
@@ -39,6 +42,8 @@ export default function App() {
   const pausedRef = useRef(false)
   const listeningRef = useRef(false)
   const screenRef = useRef<Screen>('onboarding')
+  const recoveryRef = useRef(false)
+  const modelIdRef = useRef(DEFAULT_MODEL_ID)
 
   useEffect(() => {
     screenRef.current = screen
@@ -146,6 +151,26 @@ export default function App() {
     speakThenListen(FALLBACK_MESSAGE_1, handleVoiceInput)
   }
 
+  function recoverAfterStall(retry: boolean) {
+    if (recoveryRef.current) {
+      speakThenListen(
+        'Il telefonino è un po’ stanco per raccontare adesso. Riprova tra poco, oppure scegli con i pulsanti sullo schermo.',
+        handleVoiceInput,
+      )
+      return
+    }
+    recoveryRef.current = true
+    llmEngine.destroyWorker()
+    llmEngine.load((status) => {
+      if (status.phase === 'ready') {
+        void generateStep(retry)
+      }
+      if (status.phase === 'error') {
+        speakThenListen(GENERIC_ERROR_MESSAGE, handleVoiceInput)
+      }
+    }, modelIdRef.current)
+  }
+
   async function generateStep(retry = false) {
     const engine = storyEngineRef.current
     if (!engine) return
@@ -153,8 +178,23 @@ export default function App() {
     const { messages } = retry
       ? engine.retryMessages()
       : engine.nextStepMessages()
+    let firstTokenSeen = false
+    const watchdog = window.setTimeout(() => {
+      if (!firstTokenSeen && llmEngine.isGenerating) {
+        llmEngine.destroyWorker()
+        recoveryRef.current = true
+        setLlmStatus({ phase: 'idle' })
+        recoverAfterStall(retry)
+      }
+    }, FIRST_TOKEN_TIMEOUT_MS)
     try {
-      const raw = await llmEngine.generate(messages)
+      const raw = await llmEngine.generate(messages, {
+        onFirstToken: () => {
+          firstTokenSeen = true
+          window.clearTimeout(watchdog)
+        },
+      })
+      window.clearTimeout(watchdog)
       const parsed = parseStoryBeat(raw, engine.isFinalStep)
       if (!parsed.ok) {
         speakThenListen(GENERIC_ERROR_MESSAGE, handleVoiceInput)
@@ -170,11 +210,14 @@ export default function App() {
         if (isEnd) setScreen('ended')
       })
     } catch {
+      window.clearTimeout(watchdog)
       speakThenListen(GENERIC_ERROR_MESSAGE, handleVoiceInput)
     }
   }
 
   const startModelLoad = useCallback((modelId: string) => {
+    modelIdRef.current = modelId
+    recoveryRef.current = false
     setLlmStatus({ phase: 'loading', progress: 0, text: '' })
     llmEngine.load(
       (status) => {
