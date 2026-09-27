@@ -130,7 +130,13 @@ class SpeechRecognizer {
       }
       if (speechNow) {
         this.lastSpeechAt = Date.now()
-        if (handsFree) this.scheduleSilenceEnd()
+        if (handsFree) {
+          if (event.results[event.results.length - 1]?.isFinal) {
+            this.stop()
+          } else {
+            this.scheduleSilenceEnd()
+          }
+        }
       }
     }
     recognition.onerror = (event) => {

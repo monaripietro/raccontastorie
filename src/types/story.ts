@@ -1,5 +1,7 @@
 export type AgeGroup = '3-5' | '6-9' | '10+'
 
+export type ChoiceMode = 'closed' | 'hybrid' | 'open'
+
 export type StoryOption = {
   id: string
   label: string
@@ -29,7 +31,7 @@ export type AgeProfile = {
   styleGuide: string
   maxSentenceWords: number
   narrationMaxWords: number
-  closedChoices: boolean
+  choiceMode: ChoiceMode
 }
 
 export type StoryChoiceMemory = {
