@@ -259,6 +259,19 @@ export class StoryEngine {
     }
   }
 
+  retryMessages(): { messages: ChatMessage[]; step: number } {
+    return {
+      step: this.step,
+      messages: buildStoryMessages({
+        ageGroup: this.ageGroup,
+        storyTheme: this.storyTheme,
+        step: this.step,
+        isFinalStep: this.step >= this.profile.totalSteps,
+        choicesMemory: this.choicesMemory,
+      }),
+    }
+  }
+
   registerChoice(chosenLabel: string, transcript: string): void {
     this.choicesMemory.push({
       step: this.step,

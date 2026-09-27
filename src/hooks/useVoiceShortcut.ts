@@ -1,44 +1,49 @@
 import { useEffect, useRef } from 'react'
 
-type UsePushToTalkOptions = {
+type UseVoiceShortcutOptions = {
   enabled: boolean
-  onPressStart: () => void
-  onPressEnd: () => void
+  onToggle: () => void
 }
 
-export function usePushToTalk({
+export function useVoiceShortcut({
   enabled,
-  onPressStart,
-  onPressEnd,
-}: UsePushToTalkOptions): void {
+  onToggle,
+}: UseVoiceShortcutOptions): void {
   const pressingRef = useRef(false)
 
   useEffect(() => {
     if (!enabled) return
+
+    const isTypingTarget = (target: EventTarget | null): boolean => {
+      const el = target as HTMLElement | null
+      if (!el) return false
+      return (
+        el.tagName === 'INPUT' ||
+        el.tagName === 'TEXTAREA' ||
+        el.isContentEditable
+      )
+    }
+
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== ' ' || event.repeat) return
-      const target = event.target as HTMLElement | null
-      if (target && ['INPUT', 'TEXTAREA', 'BUTTON'].includes(target.tagName)) {
-        if (target.tagName === 'BUTTON') return
-        return
-      }
+      if (isTypingTarget(event.target)) return
       event.preventDefault()
       if (pressingRef.current) return
       pressingRef.current = true
-      onPressStart()
+      onToggle()
     }
+
     const handleKeyUp = (event: KeyboardEvent) => {
       if (event.key !== ' ') return
       event.preventDefault()
-      if (!pressingRef.current) return
       pressingRef.current = false
-      onPressEnd()
     }
+
     window.addEventListener('keydown', handleKeyDown)
     window.addEventListener('keyup', handleKeyUp)
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('keyup', handleKeyUp)
     }
-  }, [enabled, onPressStart, onPressEnd])
+  }, [enabled, onToggle])
 }
