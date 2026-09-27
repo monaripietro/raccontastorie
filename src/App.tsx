@@ -3,7 +3,7 @@ import AgeSelector from './components/AgeSelector'
 import AudioOrb, { type OrbState } from './components/AudioOrb'
 import ChoiceButtons from './components/ChoiceButtons'
 import ModelOnboarding from './components/ModelOnboarding'
-import { usePushToTalk } from './hooks/usePushToTalk'
+import { useVoiceShortcut } from './hooks/useVoiceShortcut'
 import { llmEngine, type LlmStatus } from './services/llmEngine'
 import {
   matchTranscriptToOptions,
@@ -16,10 +16,13 @@ import type { AgeGroup, StoryBeat, StoryOption } from './types/story'
 
 type Screen = 'onboarding' | 'age-selection' | 'story' | 'ended'
 
+const WELCOME_MESSAGE =
+  'Ora ti racconto una storia e poi ti farò una domanda. Non devi toccare nulla: quando vedi l’anello verde ti sto ascoltando, e quando finisci di parlare io continuo la storia.'
+
 const FALLBACK_MESSAGE_1 =
-  'Non sono riuscito a sentirti bene. Tieni premuta la barra spaziatrice e ripetimi cosa vuoi fare.'
+  'Non ti ho sentito bene. Parla quando vedi l’anello verde, e dimmi cosa scegli.'
 const FALLBACK_MESSAGE_2 =
-  'Puoi scegliere tra le opzioni che ti ho detto, oppure tocca uno dei pulsanti sullo schermo. Cosa preferisci?'
+  'Puoi anche toccare uno dei pulsanti sullo schermo. Cosa preferisci?'
 const GENERIC_ERROR_MESSAGE =
   'Scusa, mi sono distratto un attimo. Ripetimi cosa vuoi fare.'
 
@@ -31,10 +34,15 @@ export default function App() {
   const [lastTranscript, setLastTranscript] = useState('')
   const [sttSupported] = useState(() => speechRecognizer.isSupported)
 
-  const pressActiveRef = useRef(false)
   const storyEngineRef = useRef<StoryEngine | null>(null)
   const fallbackAttemptsRef = useRef(0)
-  const handlingRef = useRef(false)
+  const pausedRef = useRef(false)
+  const listeningRef = useRef(false)
+  const screenRef = useRef<Screen>('onboarding')
+
+  useEffect(() => {
+    screenRef.current = screen
+  }, [screen])
 
   useEffect(() => {
     speechSynthesizer.init()
@@ -45,10 +53,126 @@ export default function App() {
     }
   }, [])
 
-  const speakThenIdle = useCallback((text: string) => {
-    setOrbState('speaking')
-    speechSynthesizer.speak(text, { onEnd: () => setOrbState('idle') })
-  }, [])
+  const startListening = useCallback(
+    (onFinal: (transcript: string) => void) => {
+      if (listeningRef.current || pausedRef.current) return
+      if (!sttSupported) return
+      listeningRef.current = true
+      setLastTranscript('')
+      const started = speechRecognizer.start({
+        onFinalResult: (transcript) => {
+          listeningRef.current = false
+          setOrbState('loading')
+          onFinal(transcript)
+        },
+        onPartial: (transcript) => {
+          if (transcript.length > 0) setLastTranscript(transcript)
+        },
+        onError: () => {
+          listeningRef.current = false
+          setOrbState('idle')
+        },
+        handsFree: true,
+        silenceMs: 1800,
+      })
+      if (started) {
+        setOrbState('listening')
+      } else {
+        listeningRef.current = false
+      }
+    },
+    [sttSupported],
+  )
+
+  const speakThenListen = useCallback(
+    (
+      text: string,
+      onTranscript: (transcript: string) => void,
+      onDone?: () => void,
+    ) => {
+      speechRecognizer.abort()
+      listeningRef.current = false
+      pausedRef.current = false
+      setOrbState('speaking')
+      speechSynthesizer.speakSafely(text, {
+        onEnd: () => {
+          onDone?.()
+          if (!pausedRef.current) {
+            window.setTimeout(() => {
+              if (!pausedRef.current) startListening(onTranscript)
+            }, 400)
+          }
+        },
+      })
+    },
+    [startListening],
+  )
+
+  function handleVoiceInput(transcript: string) {
+    const engine = storyEngineRef.current
+    if (!engine || screenRef.current !== 'story') {
+      setOrbState('idle')
+      return
+    }
+    setLastTranscript(transcript)
+    const beat = engine.beat
+    if (!beat) {
+      setOrbState('idle')
+      return
+    }
+    const { option } = matchTranscriptToOptions(transcript, beat.options)
+    advanceWithChoice(option, transcript)
+  }
+
+  function advanceWithChoice(
+    option: StoryOption | null,
+    transcript: string,
+  ) {
+    const engine = storyEngineRef.current
+    if (!engine) return
+    if (option) {
+      engine.registerChoice(option.label, transcript)
+      fallbackAttemptsRef.current = 0
+      setCurrentBeat(null)
+      void generateStep()
+      return
+    }
+    fallbackAttemptsRef.current += 1
+    const beat = engine.beat
+    if (fallbackAttemptsRef.current >= 2 && beat && beat.options.length > 0) {
+      speakThenListen(FALLBACK_MESSAGE_2, handleVoiceInput)
+      return
+    }
+    speakThenListen(FALLBACK_MESSAGE_1, handleVoiceInput)
+  }
+
+  async function generateStep(retry = false) {
+    const engine = storyEngineRef.current
+    if (!engine) return
+    setOrbState('loading')
+    const { messages } = retry
+      ? engine.retryMessages()
+      : engine.nextStepMessages()
+    try {
+      const raw = await llmEngine.generate(messages)
+      const parsed = parseStoryBeat(raw, engine.isFinalStep)
+      if (!parsed.ok) {
+        speakThenListen(GENERIC_ERROR_MESSAGE, handleVoiceInput)
+        return
+      }
+      engine.setBeat(parsed.beat)
+      setCurrentBeat(parsed.beat)
+      const isEnd = parsed.beat.isStoryEnd || engine.isFinalStep
+      const text = isEnd
+        ? parsed.beat.narration
+        : `${parsed.beat.narration} ${parsed.beat.choicePrompt}`
+      speakThenListen(text, handleVoiceInput, () => {
+        if (isEnd) setScreen('ended')
+      })
+    } catch {
+      speakThenListen(GENERIC_ERROR_MESSAGE, handleVoiceInput)
+    }
+  }
 
   const startModelLoad = useCallback((modelId: string) => {
     setLlmStatus({ phase: 'loading', progress: 0, text: '' })
@@ -63,145 +187,62 @@ export default function App() {
     )
   }, [])
 
-  const generateStep = useCallback(
-    async (engine: StoryEngine) => {
-      setOrbState('loading')
-      const { messages } = engine.nextStepMessages()
-      try {
-        const raw = await llmEngine.generate(messages)
-        const parsed = parseStoryBeat(raw, engine.isFinalStep)
-        if (!parsed.ok) {
-          speakThenIdle(GENERIC_ERROR_MESSAGE)
-          return
-        }
-        engine.setBeat(parsed.beat)
-        setCurrentBeat(parsed.beat)
-        const text =
-          parsed.beat.isStoryEnd || engine.isFinalStep
-            ? `${parsed.beat.narration}`
-            : `${parsed.beat.narration} ${parsed.beat.choicePrompt}`
-        speakThenIdle(text)
-        if (parsed.beat.isStoryEnd || engine.isFinalStep) {
-          setScreen('ended')
-        }
-      } catch {
-        speakThenIdle(GENERIC_ERROR_MESSAGE)
-      }
-    },
-    [speakThenIdle],
-  )
-
-  const handleAgeSelection = useCallback(
-    (group: AgeGroup) => {
-      const engine = new StoryEngine(group, 'una storia magica')
-      storyEngineRef.current = engine
-      fallbackAttemptsRef.current = 0
-      setScreen('story')
-      void generateStep(engine)
-    },
-    [generateStep],
-  )
-
-  const advanceWithChoice = useCallback(
-    (engine: StoryEngine, option: StoryOption | null, transcript: string) => {
-      if (option) {
-        engine.registerChoice(option.label, transcript)
-        fallbackAttemptsRef.current = 0
-        setCurrentBeat(null)
-        void generateStep(engine)
-        return
-      }
-      fallbackAttemptsRef.current += 1
-      const beat = engine.beat
-      if (fallbackAttemptsRef.current >= 2 && beat && beat.options.length > 0) {
-        speakThenIdle(FALLBACK_MESSAGE_2)
-        return
-      }
-      speakThenIdle(FALLBACK_MESSAGE_1)
-    },
-    [speakThenIdle, generateStep],
-  )
-
-  const handleTranscript = useCallback(
-    async (transcript: string) => {
-      if (handlingRef.current) return
-      const engine = storyEngineRef.current
-      if (!engine || screen !== 'story') return
-      handlingRef.current = true
-      try {
-        setLastTranscript(transcript)
-        const beat = engine.beat ?? currentBeat
-        if (!beat) return
-        const { option } = matchTranscriptToOptions(transcript, beat.options)
-        advanceWithChoice(engine, option, transcript)
-      } finally {
-        handlingRef.current = false
-      }
-    },
-    [screen, currentBeat, advanceWithChoice],
-  )
-
-  const handleTranscriptRef = useRef(handleTranscript)
-  useEffect(() => {
-    handleTranscriptRef.current = handleTranscript
-  }, [handleTranscript])
-
-  const handlePressStart = useCallback(() => {
-    if (pressActiveRef.current) return
-    if (orbState === 'speaking' || orbState === 'loading') return
-    if (!sttSupported) return
-    pressActiveRef.current = true
-    const started = speechRecognizer.start({
-      onFinalResult: (transcript) => {
-        pressActiveRef.current = false
-        setOrbState('loading')
-        handleTranscriptRef.current(transcript)
-      },
-      onError: () => {
-        pressActiveRef.current = false
+  const handleAgeSelection = useCallback((group: AgeGroup) => {
+    const engine = new StoryEngine(group, 'una storia magica')
+    storyEngineRef.current = engine
+    fallbackAttemptsRef.current = 0
+    setScreen('story')
+    speechSynthesizer.speakSafely(WELCOME_MESSAGE, {
+      onEnd: () => {
+        void generateStep()
       },
     })
-    if (started) {
-      setOrbState('listening')
-    }
-  }, [orbState, sttSupported])
-
-  const handlePressEnd = useCallback(() => {
-    if (!pressActiveRef.current) return
-    pressActiveRef.current = false
-    speechRecognizer.stop()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  usePushToTalk({
-    enabled:
-      screen === 'story' &&
-      sttSupported &&
-      (orbState === 'idle' || orbState === 'listening'),
-    onPressStart: handlePressStart,
-    onPressEnd: handlePressEnd,
+  const handleToggle = useCallback(() => {
+    if (screenRef.current !== 'story') return
+    if (speechRecognizer.isActive) {
+      pausedRef.current = true
+      speechRecognizer.abort()
+      listeningRef.current = false
+      setOrbState('idle')
+      return
+    }
+    pausedRef.current = false
+    startListening(handleVoiceInput)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [startListening])
+
+  useVoiceShortcut({
+    enabled: screen === 'story',
+    onToggle: handleToggle,
   })
 
-  const handleChoiceButton = useCallback(
-    (option: StoryOption) => {
-      const engine = storyEngineRef.current
-      if (!engine || screen !== 'story') return
-      setLastTranscript(option.label)
-      advanceWithChoice(engine, option, option.label)
-    },
-    [screen, advanceWithChoice],
-  )
+  const handleChoiceButton = useCallback((option: StoryOption) => {
+    const engine = storyEngineRef.current
+    if (!engine || screenRef.current !== 'story') return
+    speechRecognizer.abort()
+    listeningRef.current = false
+    pausedRef.current = false
+    setLastTranscript(option.label)
+    advanceWithChoice(option, option.label)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const handleRestart = useCallback(() => {
     storyEngineRef.current = null
     setCurrentBeat(null)
     setLastTranscript('')
     fallbackAttemptsRef.current = 0
+    pausedRef.current = false
+    listeningRef.current = false
     setOrbState('idle')
     setScreen('age-selection')
   }, [])
 
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center gap-8 bg-slate-950 px-6 py-12 text-slate-100">
+    <main className="flex min-h-[100dvh] flex-col items-center justify-center gap-6 bg-slate-950 px-4 py-8 text-slate-100 sm:gap-8 sm:px-6 sm:py-12">
       <header className="text-center">
         <h1 className="text-4xl font-bold tracking-tight">Raccontastorie</h1>
         <p className="mt-2 text-sm text-slate-400">
@@ -230,9 +271,8 @@ export default function App() {
           )}
           <AudioOrb
             state={orbState}
-            onPressStart={handlePressStart}
-            onPressEnd={handlePressEnd}
-            disabled={screen === 'ended' || !sttSupported}
+            onToggle={handleToggle}
+            disabled={screen === 'ended'}
           />
           {currentBeat && !currentBeat.isStoryEnd && (
             <ChoiceButtons
@@ -266,7 +306,7 @@ export default function App() {
         </>
       )}
 
-      <footer className="text-xs text-slate-600">
+      <footer className="safe-bottom text-xs text-slate-600">
         Funziona interamente offline, nel tuo browser.
       </footer>
     </main>

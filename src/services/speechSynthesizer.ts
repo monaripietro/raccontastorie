@@ -63,6 +63,14 @@ class SpeechSynthesizer {
     }
   }
 
+  speakSafely(text: string, options: SpeakOptions = {}): void {
+    try {
+      this.speak(text, options)
+    } catch {
+      options.onEnd?.()
+    }
+  }
+
   private playNext(): void {
     const item = this.queue.shift()
     if (!item) {

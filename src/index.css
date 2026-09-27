@@ -51,3 +51,34 @@
     }
   }
 }
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+#root {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+button {
+  touch-action: manipulation;
+}
+
+button[aria-pressed='true'] {
+  touch-action: none;
+}
+
+.safe-bottom {
+  padding-bottom: max(1rem, env(safe-area-inset-bottom));
+}
+
+[data-orb] {
+  -webkit-user-select: none;
+  user-select: none;
+}
