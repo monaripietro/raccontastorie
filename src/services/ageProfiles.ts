@@ -8,7 +8,7 @@ export const AGE_PROFILES: Record<AgeGroup, AgeProfile> = {
   '3-5': {
     group: '3-5',
     label: '3-5 anni',
-    totalSteps: 3,
+    totalSteps: 5,
     phases: [
       phase(
         'situazione_iniziale',
@@ -16,21 +16,31 @@ export const AGE_PROFILES: Record<AgeGroup, AgeProfile> = {
         'Presenta il protagonista e la mancanza o il danno che dà avvio alla storia.',
       ),
       phase(
+        'partenza',
+        'Partenza e chiamata',
+        'Il protagonista parte per il viaggio e accetta la chiamata all\u2019avventura.',
+      ),
+      phase(
         'donatore_magico',
         'Donatore e strumento magico',
         'Il protagonista incontra un donatore e riceve uno strumento magico.',
       ),
       phase(
+        'prova',
+        'Prova e aiuto degli amici',
+        'Il protagonista affronta la prova decisiva con l\u2019aiuto degli amici.',
+      ),
+      phase(
         'lieto_fine',
         'Prova superata e festa',
-        'La prova viene superata e la storia si chiude con un lieto fine.',
+        'La prova viene superata e la storia si chiude con un lieto fine e una festa.',
       ),
     ],
     styleGuide:
-      'Parole semplici e frasi cortissime (meno di 15 parole per frase). Tono rassicurante, dolce e allegro. Niente momenti paurosi. Le scelte sono sempre due, chiare e polarizzate (per esempio: la porta rossa o la porta blu).',
+      'Parole semplici e frasi cortissime (meno di 15 parole per frase). Tono rassicurante, dolce e allegro. Niente momenti paurosi. La narrazione di ogni tappa è ricca e immersiva, con descrizioni sensoriali semplici (colori, suoni, profumi).',
     maxSentenceWords: 15,
-    narrationMaxWords: 50,
-    closedChoices: true,
+    narrationMaxWords: 90,
+    choiceMode: 'closed',
   },
   '6-9': {
     group: '6-9',
@@ -40,7 +50,7 @@ export const AGE_PROFILES: Record<AgeGroup, AgeProfile> = {
       phase(
         'mondo_ordinario',
         'Mondo ordinario e chiamata',
-        'Il mondo ordinario del protagonista e la chiamata all’avventura.',
+        'Il mondo ordinario del protagonista e la chiamata all\u2019avventura.',
       ),
       phase(
         'varco_aiutante',
@@ -50,24 +60,24 @@ export const AGE_PROFILES: Record<AgeGroup, AgeProfile> = {
       phase(
         'prove_antagonista',
         'Prove e antagonista',
-        'Le prime prove e l’apparizione dell’antagonista.',
+        'Le prime prove e l\u2019apparizione dell\u2019antagonista.',
       ),
       phase(
         'climax',
         'Climax',
-        'Lo scontro risolutivo con l’antagonista.',
+        'Lo scontro risolutivo con l\u2019antagonista.',
       ),
       phase(
         'ritorno_elisir',
-        'Ritorno con l’elisir',
+        'Ritorno con l\u2019elisir',
         'Il ritorno con la ricompensa e la lezione appresa.',
       ),
     ],
     styleGuide:
-      'Struttura sintattica più ricca, con elementi di mistero e relazioni causa-effetto. Le opzioni sono due o tre, descrittive ma facili da capire.',
+      'Struttura sintattica più ricca, con elementi di mistero e relazioni causa-effetto. Narrazioni vivaci con dettagli avventurosi.',
     maxSentenceWords: 20,
-    narrationMaxWords: 70,
-    closedChoices: false,
+    narrationMaxWords: 110,
+    choiceMode: 'hybrid',
   },
   '10+': {
     group: '10+',
@@ -77,12 +87,12 @@ export const AGE_PROFILES: Record<AgeGroup, AgeProfile> = {
       phase(
         'mondo_chiamata',
         'Mondo ordinario e chiamata',
-        'Il mondo ordinario, la chiamata all’avventura e il rifiuto con la spinta.',
+        'Il mondo ordinario, la chiamata all\u2019avventura e il rifiuto con la spinta.',
       ),
       phase(
         'mentore_varco',
         'Mentore e varco',
-        'L’incontro con il mentore e il varco della soglia.',
+        'L\u2019incontro con il mentore e il varco della soglia.',
       ),
       phase(
         'prove_alleati',
@@ -92,7 +102,7 @@ export const AGE_PROFILES: Record<AgeGroup, AgeProfile> = {
       phase(
         'caverna',
         'Avvicinamento alla caverna',
-        'L’avvicinamento alla caverna più recondita.',
+        'L\u2019avvicinamento alla caverna più recondita.',
       ),
       phase(
         'calvario',
@@ -111,9 +121,9 @@ export const AGE_PROFILES: Record<AgeGroup, AgeProfile> = {
       ),
     ],
     styleGuide:
-      'Vocabolario articolato, sfumature emotive, dilemmi morali o strategici. Le scelte possono essere aperte o ibride: chiedi al bambino cosa decide di fare.',
+      'Vocabolario articolato, sfumature emotive, dilemmi morali o strategici. Narrazioni intense e cinematografiche.',
     maxSentenceWords: 25,
-    narrationMaxWords: 80,
-    closedChoices: false,
+    narrationMaxWords: 130,
+    choiceMode: 'open',
   },
 }
