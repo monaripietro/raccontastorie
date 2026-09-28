@@ -95,7 +95,10 @@ export default function App() {
   }, [])
 
   const startListening = useCallback(
-    (onFinal: (transcript: string) => void) => {
+    (
+      onFinal: (transcript: string) => void,
+      silenceMs = 2500,
+    ) => {
       if (listeningRef.current || pausedRef.current) return
       if (!sttSupported) return
       listeningRef.current = true
@@ -126,7 +129,7 @@ export default function App() {
           setOrbState('idle')
         },
         handsFree: true,
-        silenceMs: 1800,
+        silenceMs,
       })
       if (started) {
         setOrbState('listening')
@@ -142,18 +145,21 @@ export default function App() {
       text: string,
       onTranscript: (transcript: string) => void,
       onDone?: () => void,
+      opts?: { listenAfter?: boolean; silenceMs?: number },
     ) => {
       speechRecognizer.abort()
       listeningRef.current = false
       pausedRef.current = false
       setOrbState('speaking')
+      const listenAfter = opts?.listenAfter !== false
       speechSynthesizer.speakSafely(text, {
         onEnd: () => {
           onDone?.()
+          if (!listenAfter) return
           if (!pausedRef.current && sttSupported) {
             window.setTimeout(() => {
               if (!pausedRef.current && !listeningRef.current) {
-                startListening(onTranscript)
+                startListening(onTranscript, opts?.silenceMs)
               }
             }, 700)
           } else if (!sttSupported) {
@@ -365,8 +371,10 @@ export default function App() {
     }
     if (!isMeaningfulTranscript(transcript) && transcript.trim().length < 3) {
       speakThenListen(
-        'Non ti ho sentito bene. Dimmi: su cosa vuoi la storia? Qualsiasi argomento va bene, oppure dì scegli tu.',
+        'Ti ascolto! Dimmi pure: di cosa vuoi la storia?',
         handleThemeInput,
+        undefined,
+        { silenceMs: 4500 },
       )
       return
     }
@@ -438,6 +446,7 @@ export default function App() {
         () => {
           void generateStep()
         },
+        { listenAfter: false },
       )
     } catch {
       window.clearTimeout(watchdog)
@@ -473,7 +482,9 @@ export default function App() {
     storyEngineRef.current = engine
     fallbackAttemptsRef.current = 0
     setScreen('theme')
-    speakThenListen(THEME_PROMPT, handleThemeInput)
+    speakThenListen(THEME_PROMPT, handleThemeInput, undefined, {
+      silenceMs: 4500,
+    })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [speakThenListen])
 
