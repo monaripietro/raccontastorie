@@ -5,7 +5,7 @@ import ChoiceButtons from './components/ChoiceButtons'
 import ModelOnboarding from './components/ModelOnboarding'
 import { useVoiceShortcut } from './hooks/useVoiceShortcut'
 import { llmEngine, type ChatMessage, type LlmStatus } from './services/llmEngine'
-import { playListenCue } from './services/audioCues'
+import { playListenCue, unlockAudioOnUserGesture } from './services/audioCues'
 import { OpenRouterEngine } from './services/openRouterEngine'
 import {
   isMeaningfulTranscript,
@@ -87,7 +87,9 @@ export default function App() {
 
   useEffect(() => {
     speechSynthesizer.init()
+    const removeUnlock = unlockAudioOnUserGesture()
     return () => {
+      removeUnlock()
       speechSynthesizer.cancel()
       speechRecognizer.abort()
       llmEngine.destroyWorker()

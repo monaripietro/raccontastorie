@@ -25,6 +25,7 @@ type AudioContextLike = {
 }
 
 let ctx: AudioContextLike | null = null
+let unlocked = false
 
 function ensureContext(): AudioContextLike | null {
   if (typeof window === 'undefined') return null
@@ -71,5 +72,33 @@ export function playListenCue(kind: CueKind): void {
     }
   } catch {
     // audio non disponibile: nessun segnale, il flusso continua
+  }
+}
+
+export function unlockAudioOnUserGesture(): () => void {
+  if (typeof window === 'undefined' || unlocked) return () => {}
+  const unlock = () => {
+    if (unlocked) return
+    unlocked = true
+    try {
+      const context = ensureContext()
+      if (!context) return
+      // silenzio impercettibile: forza lo sblocco delle policy autoplay
+      playTone(context, 1, 1, 0.01)
+      void context.resume()
+    } catch {
+      // audio non disponibile su questo device
+    }
+    window.removeEventListener('pointerdown', unlock)
+    window.removeEventListener('touchstart', unlock)
+    window.removeEventListener('keydown', unlock)
+  }
+  window.addEventListener('pointerdown', unlock, { passive: true })
+  window.addEventListener('touchstart', unlock, { passive: true })
+  window.addEventListener('keydown', unlock)
+  return () => {
+    window.removeEventListener('pointerdown', unlock)
+    window.removeEventListener('touchstart', unlock)
+    window.removeEventListener('keydown', unlock)
   }
 }
