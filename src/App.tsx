@@ -81,6 +81,8 @@ export default function App() {
   const openRouterRef = useRef<OpenRouterEngine | null>(null)
   const pendingIntentRef = useRef<pendingIntent | null>(null)
   const micSessionRef = useRef(0)
+  const emptyListenRef = useRef(0)
+  const everHeardSpeechRef = useRef(false)
 
   useEffect(() => {
     screenRef.current = screen
@@ -111,11 +113,28 @@ export default function App() {
         onFinalResult: (transcript) => {
           listeningRef.current = false
           playListenCue('listening-off')
+          if (transcript.trim().length === 0) {
+            emptyListenRef.current += 1
+            if (
+              !everHeardSpeechRef.current &&
+              emptyListenRef.current >= 3
+            ) {
+              setSttSupported(false)
+              setOrbState('idle')
+              speechSynthesizer.speakSafely(STT_UNAVAILABLE_MESSAGE)
+              return
+            }
+          } else {
+            everHeardSpeechRef.current = true
+          }
           setOrbState('loading')
           onFinal(transcript)
         },
         onPartial: (transcript) => {
-          if (transcript.length > 0) setLastTranscript(transcript)
+          if (transcript.length > 0) {
+            everHeardSpeechRef.current = true
+            setLastTranscript(transcript)
+          }
         },
         onError: (error) => {
           listeningRef.current = false
