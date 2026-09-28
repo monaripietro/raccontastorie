@@ -384,6 +384,20 @@ export default function App() {
       const text = isEnd
         ? parsed.beat.narration
         : `${parsed.beat.narration} ${parsed.beat.choicePrompt}`
+      if (speechSynthesizer.isSpeaking) {
+        speechSynthesizer.speak(text, {
+          onEnd: () => {
+            if (isEnd) setScreen('ended')
+            if (!sttSupported) return
+            window.setTimeout(() => {
+              if (!pausedRef.current && !listeningRef.current && screenRef.current === 'story') {
+                startListening(handleVoiceInput)
+              }
+            }, 700)
+          },
+        })
+        return
+      }
       speakThenListen(text, handleVoiceInput, () => {
         if (isEnd) setScreen('ended')
       })
@@ -470,12 +484,11 @@ export default function App() {
       engine.setTitle(parsed.title)
       setStoryTitle(parsed.title)
       setScreen('story')
+      void generateStep()
       speakThenListen(
         `${TITLE_ANNOUNCEMENT(parsed.title)} ${WELCOME_MESSAGE}`,
         handleVoiceInput,
-        () => {
-          void generateStep()
-        },
+        undefined,
         { listenAfter: false },
       )
     } catch {
