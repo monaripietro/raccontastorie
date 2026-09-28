@@ -5,6 +5,7 @@ import ChoiceButtons from './components/ChoiceButtons'
 import ModelOnboarding from './components/ModelOnboarding'
 import { useVoiceShortcut } from './hooks/useVoiceShortcut'
 import { llmEngine, type ChatMessage, type LlmStatus } from './services/llmEngine'
+import { playListenCue } from './services/audioCues'
 import { OpenRouterEngine } from './services/openRouterEngine'
 import {
   isMeaningfulTranscript,
@@ -106,6 +107,7 @@ export default function App() {
       const started = speechRecognizer.start({
         onFinalResult: (transcript) => {
           listeningRef.current = false
+          playListenCue('listening-off')
           setOrbState('loading')
           onFinal(transcript)
         },
@@ -132,6 +134,7 @@ export default function App() {
         silenceMs,
       })
       if (started) {
+        playListenCue('listening-on')
         setOrbState('listening')
       } else {
         listeningRef.current = false
@@ -501,6 +504,7 @@ export default function App() {
       pausedRef.current = true
       speechRecognizer.abort()
       listeningRef.current = false
+      playListenCue('listening-off')
       setOrbState('idle')
       return
     }
@@ -531,6 +535,9 @@ export default function App() {
   }, [])
 
   const handleRestart = useCallback(() => {
+    speechSynthesizer.cancel()
+    speechRecognizer.abort()
+    openRouterRef.current?.cancel()
     storyEngineRef.current = null
     setCurrentBeat(null)
     setLastTranscript('')
@@ -630,6 +637,15 @@ export default function App() {
             >
               «{lastTranscript}»
             </p>
+          )}
+          {screen === 'story' && (
+            <button
+              type="button"
+              onClick={handleRestart}
+              className="rounded-full border border-slate-600 bg-slate-900/60 px-6 py-2 text-sm text-slate-300 transition hover:border-indigo-400/60 hover:text-slate-100 focus:outline-none focus-visible:ring-4 focus-visible:ring-indigo-300/50"
+            >
+              ✨ Nuova storia
+            </button>
           )}
           {screen === 'ended' && (
             <div className="flex flex-col items-center gap-4 text-center">
