@@ -80,6 +80,7 @@ export default function App() {
   const engineKindRef = useRef<EngineKind>('webgpu')
   const openRouterRef = useRef<OpenRouterEngine | null>(null)
   const pendingIntentRef = useRef<pendingIntent | null>(null)
+  const micSessionRef = useRef(0)
 
   useEffect(() => {
     screenRef.current = screen
@@ -152,6 +153,7 @@ export default function App() {
       onDone?: () => void,
       opts?: { listenAfter?: boolean; silenceMs?: number },
     ) => {
+      const micSession = micSessionRef.current
       speechRecognizer.abort()
       listeningRef.current = false
       pausedRef.current = false
@@ -163,6 +165,7 @@ export default function App() {
           if (!listenAfter) return
           if (!pausedRef.current && sttSupported) {
             window.setTimeout(() => {
+              if (micSessionRef.current !== micSession) return
               if (!pausedRef.current && !listeningRef.current) {
                 startListening(onTranscript, opts?.silenceMs)
               }
@@ -384,6 +387,20 @@ export default function App() {
       const text = isEnd
         ? parsed.beat.narration
         : `${parsed.beat.narration} ${parsed.beat.choicePrompt}`
+      if (speechSynthesizer.isSpeaking) {
+        speechSynthesizer.speak(text, {
+          onEnd: () => {
+            if (isEnd) setScreen('ended')
+            if (!sttSupported) return
+            window.setTimeout(() => {
+              if (!pausedRef.current && !listeningRef.current && screenRef.current === 'story') {
+                startListening(handleVoiceInput)
+              }
+            }, 700)
+          },
+        })
+        return
+      }
       speakThenListen(text, handleVoiceInput, () => {
         if (isEnd) setScreen('ended')
       })
@@ -470,12 +487,11 @@ export default function App() {
       engine.setTitle(parsed.title)
       setStoryTitle(parsed.title)
       setScreen('story')
+      void generateStep()
       speakThenListen(
         `${TITLE_ANNOUNCEMENT(parsed.title)} ${WELCOME_MESSAGE}`,
         handleVoiceInput,
-        () => {
-          void generateStep()
-        },
+        undefined,
         { listenAfter: false },
       )
     } catch {
@@ -519,6 +535,7 @@ export default function App() {
   }, [speakThenListen])
 
   const handleThemeButton = useCallback((theme: string) => {
+    micSessionRef.current += 1
     speechRecognizer.abort()
     listeningRef.current = false
     handleThemeInput(theme)
@@ -529,6 +546,7 @@ export default function App() {
     if (screenRef.current !== 'story' && screenRef.current !== 'theme') return
     if (speechRecognizer.isActive) {
       pausedRef.current = true
+      micSessionRef.current += 1
       speechRecognizer.abort()
       listeningRef.current = false
       playListenCue('listening-off')
@@ -554,6 +572,7 @@ export default function App() {
   const handleChoiceButton = useCallback((option: StoryOption) => {
     const engine = storyEngineRef.current
     if (!engine || screenRef.current !== 'story') return
+    micSessionRef.current += 1
     speechRecognizer.abort()
     listeningRef.current = false
     pausedRef.current = false
@@ -564,6 +583,7 @@ export default function App() {
   }, [])
 
   const handleRestart = useCallback(() => {
+    micSessionRef.current += 1
     speechSynthesizer.cancel()
     speechRecognizer.abort()
     openRouterRef.current?.cancel()

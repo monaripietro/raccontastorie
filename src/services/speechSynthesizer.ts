@@ -8,6 +8,24 @@ type QueueItem = {
   options: SpeakOptions
 }
 
+const MAX_CHUNK_CHARS = 200
+
+function chunkText(text: string): string[] {
+  const sentences = text.match(/[^.!?…]+[.!?…]*\s*/g) ?? [text]
+  const chunks: string[] = []
+  let current = ''
+  for (const sentence of sentences) {
+    if ((current + sentence).trim().length > MAX_CHUNK_CHARS && current.trim().length > 0) {
+      chunks.push(current.trim())
+      current = sentence
+    } else {
+      current += sentence
+    }
+  }
+  if (current.trim().length > 0) chunks.push(current.trim())
+  return chunks.length > 0 ? chunks : [text]
+}
+
 type VoiceLike = { name: string; lang: string }
 
 export function scoreItalianVoice(voice: VoiceLike): number {
@@ -29,6 +47,7 @@ class SpeechSynthesizer {
   private speaking = false
   private italianVoice: SpeechSynthesisVoice | null = null
   private voicesReady = false
+  private keepAliveTimer: number | null = null
 
   get isSupported(): boolean {
     return typeof window !== 'undefined' && 'speechSynthesis' in window
@@ -77,7 +96,15 @@ class SpeechSynthesizer {
       options.onEnd?.()
       return
     }
-    this.queue.push({ text, options })
+    const chunks = chunkText(text)
+    chunks.forEach((chunk, index) => {
+      const chunkOptions: SpeakOptions = {}
+      if (index === 0 && options.onStart) chunkOptions.onStart = options.onStart
+      if (index === chunks.length - 1 && options.onEnd) {
+        chunkOptions.onEnd = options.onEnd
+      }
+      this.queue.push({ text: chunk, options: chunkOptions })
+    })
     if (!this.speaking) {
       this.playNext()
     }
@@ -91,13 +118,33 @@ class SpeechSynthesizer {
     }
   }
 
+  private startKeepAlive(): void {
+    if (this.keepAliveTimer !== null) return
+    this.keepAliveTimer = window.setInterval(() => {
+      try {
+        window.speechSynthesis.resume()
+      } catch {
+        /* noop */
+      }
+    }, 10000)
+  }
+
+  private stopKeepAlive(): void {
+    if (this.keepAliveTimer !== null) {
+      window.clearInterval(this.keepAliveTimer)
+      this.keepAliveTimer = null
+    }
+  }
+
   private playNext(): void {
     const item = this.queue.shift()
     if (!item) {
       this.speaking = false
+      this.stopKeepAlive()
       return
     }
     this.speaking = true
+    this.startKeepAlive()
     const utterance = new SpeechSynthesisUtterance(item.text)
     utterance.lang = 'it-IT'
     utterance.rate = 0.95
@@ -105,22 +152,20 @@ class SpeechSynthesizer {
     const voice = this.ensureVoice()
     if (voice) utterance.voice = voice
     utterance.onstart = () => item.options.onStart?.()
-    utterance.onend = () => {
+    let settled = false
+    const finish = () => {
+      if (settled) return
+      settled = true
       item.options.onEnd?.()
       if (this.queue.length > 0) {
         this.playNext()
       } else {
         this.speaking = false
+        this.stopKeepAlive()
       }
     }
-    utterance.onerror = () => {
-      item.options.onEnd?.()
-      if (this.queue.length > 0) {
-        this.playNext()
-      } else {
-        this.speaking = false
-      }
-    }
+    utterance.onend = finish
+    utterance.onerror = finish
     window.speechSynthesis.speak(utterance)
   }
 
@@ -128,6 +173,7 @@ class SpeechSynthesizer {
     if (!this.isSupported) return
     this.queue = []
     this.speaking = false
+    this.stopKeepAlive()
     window.speechSynthesis.cancel()
   }
 }
