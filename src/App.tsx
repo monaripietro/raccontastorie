@@ -198,6 +198,18 @@ export default function App() {
       setOrbState('idle')
       return
     }
+    if (transcript.trim().length === 0) {
+      fallbackAttemptsRef.current += 1
+      if (fallbackAttemptsRef.current >= 3) {
+        speakThenListen(FALLBACK_MESSAGE_2, handleVoiceInput)
+        return
+      }
+      speakThenListen(
+        'Ti ascolto! Dimmi pure cosa scegli.',
+        handleVoiceInput,
+      )
+      return
+    }
     setLastTranscript(transcript)
     const beat = engine.beat
     if (!beat) {
@@ -217,6 +229,19 @@ export default function App() {
         return
       }
       pendingIntentRef.current = null
+      const normalizedLower = transcript.toLowerCase().trim()
+      const saidNo =
+        normalizedLower.startsWith('no') ||
+        normalizedLower.startsWith('non ') ||
+        normalizedLower.includes('sbagliato') ||
+        normalizedLower.includes('non è')
+      if (saidNo) {
+        speakThenListen(
+          `Ok, riproviamo! Le opzioni sono: ${beat.options.map((o) => o.label).join(' oppure ')}. Cosa scegli?`,
+          handleVoiceInput,
+        )
+        return
+      }
       const { option } = matchTranscriptToOptions(transcript, beat.options)
       if (option) {
         engine.registerChoice(option.label, transcript)
@@ -510,6 +535,8 @@ export default function App() {
       setOrbState('idle')
       return
     }
+    if (speechSynthesizer.isSpeaking) return
+    if (llmEngine.isGenerating || openRouterRef.current?.isGenerating) return
     pausedRef.current = false
     if (screenRef.current === 'theme') {
       startListening(handleThemeInput)

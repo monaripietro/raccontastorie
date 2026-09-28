@@ -43,9 +43,11 @@ type StartOptions = {
   onError?: (error: string) => void
   handsFree?: boolean
   silenceMs?: number
+  noSpeechTimeoutMs?: number
 }
 
 const DEFAULT_SILENCE_MS = 1800
+const DEFAULT_NO_SPEECH_TIMEOUT_MS = 12000
 
 class SpeechRecognizer {
   private recognition: SpeechRecognitionLike | null = null
@@ -55,6 +57,7 @@ class SpeechRecognizer {
   private deliverOnEnd = true
   private endHandler: ((transcript: string) => void) | null = null
   private silenceTimer: number | null = null
+  private noSpeechTimer: number | null = null
   private lastSpeechAt = 0
   private silenceMs = DEFAULT_SILENCE_MS
 
@@ -70,6 +73,10 @@ class SpeechRecognizer {
     if (this.silenceTimer !== null) {
       window.clearTimeout(this.silenceTimer)
       this.silenceTimer = null
+    }
+    if (this.noSpeechTimer !== null) {
+      window.clearTimeout(this.noSpeechTimer)
+      this.noSpeechTimer = null
     }
   }
 
@@ -94,6 +101,7 @@ class SpeechRecognizer {
     onError,
     handsFree = false,
     silenceMs = DEFAULT_SILENCE_MS,
+    noSpeechTimeoutMs = DEFAULT_NO_SPEECH_TIMEOUT_MS,
   }: StartOptions): boolean {
     const Ctor = getRecognitionConstructor()
     if (!Ctor || this.active) return false
@@ -130,6 +138,10 @@ class SpeechRecognizer {
       }
       if (speechNow) {
         this.lastSpeechAt = Date.now()
+        if (this.noSpeechTimer !== null) {
+          window.clearTimeout(this.noSpeechTimer)
+          this.noSpeechTimer = null
+        }
         if (handsFree) {
           if (event.results[event.results.length - 1]?.isFinal) {
             this.stop()
@@ -169,6 +181,12 @@ class SpeechRecognizer {
     }
     try {
       recognition.start()
+      if (handsFree) {
+        this.noSpeechTimer = window.setTimeout(() => {
+          if (!this.active) return
+          this.stop()
+        }, noSpeechTimeoutMs)
+      }
       return true
     } catch {
       this.active = false
