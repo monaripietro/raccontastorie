@@ -5,6 +5,7 @@ import ChoiceButtons from './components/ChoiceButtons'
 import ModelOnboarding from './components/ModelOnboarding'
 import { useVoiceShortcut } from './hooks/useVoiceShortcut'
 import { llmEngine, type ChatMessage, type LlmStatus } from './services/llmEngine'
+import { playListenCue, unlockAudioOnUserGesture } from './services/audioCues'
 import { OpenRouterEngine } from './services/openRouterEngine'
 import {
   isMeaningfulTranscript,
@@ -86,7 +87,9 @@ export default function App() {
 
   useEffect(() => {
     speechSynthesizer.init()
+    const removeUnlock = unlockAudioOnUserGesture()
     return () => {
+      removeUnlock()
       speechSynthesizer.cancel()
       speechRecognizer.abort()
       llmEngine.destroyWorker()
@@ -95,7 +98,10 @@ export default function App() {
   }, [])
 
   const startListening = useCallback(
-    (onFinal: (transcript: string) => void) => {
+    (
+      onFinal: (transcript: string) => void,
+      silenceMs = 2500,
+    ) => {
       if (listeningRef.current || pausedRef.current) return
       if (!sttSupported) return
       listeningRef.current = true
@@ -103,6 +109,7 @@ export default function App() {
       const started = speechRecognizer.start({
         onFinalResult: (transcript) => {
           listeningRef.current = false
+          playListenCue('listening-off')
           setOrbState('loading')
           onFinal(transcript)
         },
@@ -126,9 +133,10 @@ export default function App() {
           setOrbState('idle')
         },
         handsFree: true,
-        silenceMs: 1800,
+        silenceMs,
       })
       if (started) {
+        playListenCue('listening-on')
         setOrbState('listening')
       } else {
         listeningRef.current = false
@@ -142,18 +150,21 @@ export default function App() {
       text: string,
       onTranscript: (transcript: string) => void,
       onDone?: () => void,
+      opts?: { listenAfter?: boolean; silenceMs?: number },
     ) => {
       speechRecognizer.abort()
       listeningRef.current = false
       pausedRef.current = false
       setOrbState('speaking')
+      const listenAfter = opts?.listenAfter !== false
       speechSynthesizer.speakSafely(text, {
         onEnd: () => {
           onDone?.()
+          if (!listenAfter) return
           if (!pausedRef.current && sttSupported) {
             window.setTimeout(() => {
               if (!pausedRef.current && !listeningRef.current) {
-                startListening(onTranscript)
+                startListening(onTranscript, opts?.silenceMs)
               }
             }, 700)
           } else if (!sttSupported) {
@@ -365,8 +376,10 @@ export default function App() {
     }
     if (!isMeaningfulTranscript(transcript) && transcript.trim().length < 3) {
       speakThenListen(
-        'Non ti ho sentito bene. Dimmi: su cosa vuoi la storia? Qualsiasi argomento va bene, oppure dì scegli tu.',
+        'Ti ascolto! Dimmi pure: di cosa vuoi la storia?',
         handleThemeInput,
+        undefined,
+        { silenceMs: 4500 },
       )
       return
     }
@@ -438,6 +451,7 @@ export default function App() {
         () => {
           void generateStep()
         },
+        { listenAfter: false },
       )
     } catch {
       window.clearTimeout(watchdog)
@@ -473,7 +487,9 @@ export default function App() {
     storyEngineRef.current = engine
     fallbackAttemptsRef.current = 0
     setScreen('theme')
-    speakThenListen(THEME_PROMPT, handleThemeInput)
+    speakThenListen(THEME_PROMPT, handleThemeInput, undefined, {
+      silenceMs: 4500,
+    })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [speakThenListen])
 
@@ -490,6 +506,7 @@ export default function App() {
       pausedRef.current = true
       speechRecognizer.abort()
       listeningRef.current = false
+      playListenCue('listening-off')
       setOrbState('idle')
       return
     }
@@ -520,6 +537,9 @@ export default function App() {
   }, [])
 
   const handleRestart = useCallback(() => {
+    speechSynthesizer.cancel()
+    speechRecognizer.abort()
+    openRouterRef.current?.cancel()
     storyEngineRef.current = null
     setCurrentBeat(null)
     setLastTranscript('')
@@ -619,6 +639,15 @@ export default function App() {
             >
               «{lastTranscript}»
             </p>
+          )}
+          {screen === 'story' && (
+            <button
+              type="button"
+              onClick={handleRestart}
+              className="rounded-full border border-slate-600 bg-slate-900/60 px-6 py-2 text-sm text-slate-300 transition hover:border-indigo-400/60 hover:text-slate-100 focus:outline-none focus-visible:ring-4 focus-visible:ring-indigo-300/50"
+            >
+              ✨ Nuova storia
+            </button>
           )}
           {screen === 'ended' && (
             <div className="flex flex-col items-center gap-4 text-center">
