@@ -1,15 +1,7 @@
 import { DEFAULT_MODEL_ID } from './modelConfig'
+import type { ChatMessage, LlmStatus } from '../types/story'
 
-export type LlmStatus =
-  | { phase: 'idle' }
-  | { phase: 'loading'; progress: number; text: string }
-  | { phase: 'ready' }
-  | { phase: 'error'; error: string }
-
-export type ChatMessage = {
-  role: 'system' | 'user' | 'assistant'
-  content: string
-}
+export type { ChatMessage, LlmStatus }
 
 export type GenerateStats = {
   firstTokenMs: number

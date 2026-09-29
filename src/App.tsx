@@ -1,720 +1,516 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import AgeSelector from './components/AgeSelector'
-import AudioOrb, { type OrbState } from './components/AudioOrb'
-import ChoiceButtons from './components/ChoiceButtons'
-import ModelOnboarding from './components/ModelOnboarding'
-import { useVoiceShortcut } from './hooks/useVoiceShortcut'
-import { llmEngine, type ChatMessage, type LlmStatus } from './services/llmEngine'
-import { playListenCue, unlockAudioOnUserGesture } from './services/audioCues'
+import { LlmEngine } from './services/llmEngine'
 import { OpenRouterEngine } from './services/openRouterEngine'
 import {
-  isMeaningfulTranscript,
-  matchTranscriptToOptions,
-  parseStoryBeat,
+  MODEL_OPTIONS,
+  DEFAULT_MODEL_ID,
+} from './services/modelConfig'
+import {
+  deleteModelFromCache,
+  estimateCacheSize,
+  formatBytes,
+  isModelCached,
+} from './services/modelCache'
+import {
+  AGE_STYLES,
+  HERO_JOURNEY,
+  TOTAL_CHAPTERS,
+  buildChapterMessages,
+  buildTitleMessages,
+  parseChapter,
   parseTitle,
-  StoryEngine,
 } from './services/storyEngine'
-import { speechRecognizer } from './services/speechRecognizer'
 import { speechSynthesizer } from './services/speechSynthesizer'
-import type { AgeGroup, StoryBeat, StoryOption } from './types/story'
+import ModelOnboarding from './components/ModelOnboarding'
+import type {
+  AgeGroup,
+  ChatMessage,
+  EngineKind,
+  LlmStatus,
+} from './types/story'
 
 type Screen =
   | 'onboarding'
   | 'age-selection'
   | 'theme'
-  | 'title'
   | 'story'
-  | 'ended'
 
-type EngineKind = 'webgpu' | 'openrouter'
+type Chapter = { title: string; content: string }
 
-const WELCOME_MESSAGE =
-  'Ora ti racconto una storia e poi ti farò una domanda. Non devi toccare nulla: quando vedi l\u2019anello verde ti sto ascoltando, e quando finisci di parlare io continuo la storia.'
+const THEME_PROMPT = 'Su cosa vorresti che ti raccontassi una storia?'
+const QUICK_THEMES = ['dinosauri', 'principesse', 'spazio', 'scegli tu']
 
-const THEME_PROMPT =
-  'Ciao, io sono Raccontastorie! Dimmi: su cosa vorresti che ti raccontassi una storia? Puoi dirmi qualsiasi cosa, per esempio dinosauri, principesse, spazio... oppure dirmi scegli tu!'
-
-const TITLE_ANNOUNCEMENT = (title: string) =>
-  `Che bello! La storia si intitola: ${title}. Spegni la luce, e ascolta...`
-
-const FALLBACK_MESSAGE_1 =
-  'Non ti ho sentito bene. Parla quando vedi l\u2019anello verde, e dimmi cosa scegli.'
-const FALLBACK_MESSAGE_2 =
-  'Puoi anche toccare uno dei pulsanti sullo schermo. Cosa preferisci?'
+const FIRST_TOKEN_TIMEOUT_MS = 120000
 
 const GENERIC_ERROR_MESSAGE =
-  'Scusa, mi sono distratto un attimo. Ripetimi cosa vuoi fare.'
+  'Scusa, mi sono distratto un attimo. Riprova con il pulsante.'
 
-const STT_UNAVAILABLE_MESSAGE =
-  'Questo browser non riesce ad ascoltare la voce. Puoi comunque giocare: tocca una delle scelte sullo schermo!'
+const GENERATION_STUCK_MESSAGE =
+  'Scusa, proprio non riesco a continuare adesso. Premi Nuova storia per ripartire.'
 
-const CONFIRM_PROMPT = (transcript: string) =>
-  `Ho capito bene? Hai detto: ${transcript}. Dimmi sì per continuare, oppure dimmi cosa preferisci davvero.`
-
-const FIRST_TOKEN_TIMEOUT_MS = 60000
-const OPENROUTER_FIRST_TOKEN_TIMEOUT_MS = 45000
-
-type pendingIntent = {
-  kind: 'confirm-match'
-  option: StoryOption
-  transcript: string
-}
+const MAX_CONSECUTIVE_GENERATION_ERRORS = 3
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>('onboarding')
   const [llmStatus, setLlmStatus] = useState<LlmStatus>({ phase: 'idle' })
-  const [orbState, setOrbState] = useState<OrbState>('idle')
-  const [currentBeat, setCurrentBeat] = useState<StoryBeat | null>(null)
-  const [lastTranscript, setLastTranscript] = useState('')
+  const [engineKind, setEngineKind] = useState<EngineKind>('webgpu')
+  const [ageGroup, setAgeGroup] = useState<AgeGroup | null>(null)
+  const [theme, setTheme] = useState('')
   const [storyTitle, setStoryTitle] = useState('')
-  const [sttSupported, setSttSupported] = useState(() =>
-    speechRecognizer.isSupported,
-  )
+  const [chapters, setChapters] = useState<Chapter[]>([])
+  const [currentChapter, setCurrentChapter] = useState<Chapter | null>(null)
+  const [isGenerating, setIsGenerating] = useState(false)
+  const [isSpeaking, setIsSpeaking] = useState(false)
+  const [generationError, setGenerationError] = useState('')
+  const [cacheInfo, setCacheInfo] = useState<{
+    modelId: string
+    cached: boolean
+    size: number
+  } | null>(null)
+  const [cacheBusy, setCacheBusy] = useState(false)
 
-  const storyEngineRef = useRef<StoryEngine | null>(null)
-  const fallbackAttemptsRef = useRef(0)
-  const pausedRef = useRef(false)
-  const listeningRef = useRef(false)
-  const screenRef = useRef<Screen>('onboarding')
-  const recoveryRef = useRef(false)
-  const engineKindRef = useRef<EngineKind>('webgpu')
+  const llmEngineRef = useRef<LlmEngine | null>(null)
   const openRouterRef = useRef<OpenRouterEngine | null>(null)
-  const pendingIntentRef = useRef<pendingIntent | null>(null)
-  const micSessionRef = useRef(0)
-
-  useEffect(() => {
-    screenRef.current = screen
-  }, [screen])
+  const engineKindRef = useRef<EngineKind>('webgpu')
+  const modelIdRef = useRef(DEFAULT_MODEL_ID)
+  const ageGroupRef = useRef<AgeGroup | null>(null)
+  const themeRef = useRef('')
+  const titleRef = useRef('')
+  const chaptersRef = useRef<Chapter[]>([])
+  const generationErrorRef = useRef(0)
+  const abortRef = useRef(false)
 
   useEffect(() => {
     speechSynthesizer.init()
-    const removeUnlock = unlockAudioOnUserGesture()
     return () => {
-      removeUnlock()
       speechSynthesizer.cancel()
-      speechRecognizer.abort()
-      llmEngine.destroyWorker()
+      llmEngineRef.current?.destroyWorker()
       openRouterRef.current?.cancel()
     }
   }, [])
 
-  const startListening = useCallback(
-    (
-      onFinal: (transcript: string) => void,
-      silenceMs = 2500,
-    ) => {
-      if (listeningRef.current || pausedRef.current) return
-      if (!sttSupported) return
-      listeningRef.current = true
-      setLastTranscript('')
-      const started = speechRecognizer.start({
-        onFinalResult: (transcript) => {
-          listeningRef.current = false
-          playListenCue('listening-off')
-          setOrbState('loading')
-          onFinal(transcript)
-        },
-        onPartial: (transcript) => {
-          if (transcript.length > 0) setLastTranscript(transcript)
-        },
-        onError: (error) => {
-          listeningRef.current = false
-          if (
-            error === 'network' ||
-            error === 'service-not-allowed' ||
-            error === 'not-allowed'
-          ) {
-            setSttSupported(false)
-            setOrbState('idle')
-            if (screenRef.current === 'story') {
-              speechSynthesizer.speakSafely(STT_UNAVAILABLE_MESSAGE)
-            }
-            return
-          }
-          setOrbState('idle')
-        },
-        handsFree: true,
-        silenceMs,
-      })
-      if (started) {
-        playListenCue('listening-on')
-        setOrbState('listening')
-      } else {
-        listeningRef.current = false
-      }
-    },
-    [sttSupported],
-  )
-
-  const speakThenListen = useCallback(
-    (
-      text: string,
-      onTranscript: (transcript: string) => void,
-      onDone?: () => void,
-      opts?: { listenAfter?: boolean; silenceMs?: number },
-    ) => {
-      const micSession = micSessionRef.current
-      speechRecognizer.abort()
-      listeningRef.current = false
-      pausedRef.current = false
-      setOrbState('speaking')
-      const listenAfter = opts?.listenAfter !== false
-      speechSynthesizer.speakSafely(text, {
-        onEnd: () => {
-          onDone?.()
-          if (!listenAfter) return
-          if (!pausedRef.current && sttSupported) {
-            window.setTimeout(() => {
-              if (micSessionRef.current !== micSession) return
-              if (!pausedRef.current && !listeningRef.current) {
-                startListening(onTranscript, opts?.silenceMs)
-              }
-            }, 700)
-          } else if (!sttSupported) {
-            setOrbState('idle')
-          }
-        },
-      })
-    },
-    [startListening, sttSupported],
-  )
-
-  async function generateText(
-    messages: ChatMessage[],
-    callbacks?: {
-      onFirstToken?: () => void
-      onToken?: (content: string) => void
-    },
-  ): Promise<string> {
-    if (engineKindRef.current === 'openrouter' && openRouterRef.current) {
-      return openRouterRef.current.generate(messages, {
-        onFirstToken: callbacks?.onFirstToken,
-        onToken: callbacks?.onToken,
-      })
-    }
-    return llmEngine.generate(messages, callbacks)
-  }
-
-  function handleVoiceInput(transcript: string) {
-    const engine = storyEngineRef.current
-    if (!engine || screenRef.current !== 'story') {
-      setOrbState('idle')
-      return
-    }
-    if (transcript.trim().length === 0) {
-      fallbackAttemptsRef.current += 1
-      if (fallbackAttemptsRef.current >= 3) {
-        speakThenListen(FALLBACK_MESSAGE_2, handleVoiceInput)
-        return
-      }
-      speakThenListen(
-        'Ti ascolto! Dimmi pure cosa scegli.',
-        handleVoiceInput,
-      )
-      return
-    }
-    setLastTranscript(transcript)
-    const beat = engine.beat
-    if (!beat) {
-      setOrbState('idle')
-      return
-    }
-
-    const confirmTarget = pendingIntentRef.current
-    if (confirmTarget && confirmTarget.kind === 'confirm-match') {
-      const normalized = transcript.toLowerCase().trim()
-      if (normalized.startsWith('sì') || normalized.startsWith('si ') || normalized === 'si') {
-        pendingIntentRef.current = null
-        engine.registerChoice(confirmTarget.option.label, confirmTarget.transcript)
-        fallbackAttemptsRef.current = 0
-        setCurrentBeat(null)
-        void generateStep()
-        return
-      }
-      pendingIntentRef.current = null
-      const normalizedLower = transcript.toLowerCase().trim()
-      const saidNo =
-        normalizedLower.startsWith('no') ||
-        normalizedLower.startsWith('non ') ||
-        normalizedLower.includes('sbagliato') ||
-        normalizedLower.includes('non è')
-      if (saidNo) {
-        speakThenListen(
-          `Ok, riproviamo! Le opzioni sono: ${beat.options.map((o) => o.label).join(' oppure ')}. Cosa scegli?`,
-          handleVoiceInput,
-        )
-        return
-      }
-      const { option } = matchTranscriptToOptions(transcript, beat.options)
-      if (option) {
-        engine.registerChoice(option.label, transcript)
-        fallbackAttemptsRef.current = 0
-        setCurrentBeat(null)
-        void generateStep()
-        return
-      }
-      advanceWithChoice(null, transcript)
-      return
-    }
-
-    const mode = engine.profile.choiceMode
-    const { option, confidence } = matchTranscriptToOptions(
-      transcript,
-      beat.options,
-    )
-
-    if (mode === 'open') {
-      if (isMeaningfulTranscript(transcript)) {
-        engine.registerChoice(transcript, transcript)
-        fallbackAttemptsRef.current = 0
-        setCurrentBeat(null)
-        void generateStep()
-      } else {
-        advanceWithChoice(null, transcript)
-      }
-      return
-    }
-
-    if (mode === 'hybrid' && !option && isMeaningfulTranscript(transcript)) {
-      engine.registerChoice(transcript, transcript)
-      fallbackAttemptsRef.current = 0
-      setCurrentBeat(null)
-      void generateStep()
-      return
-    }
-
-    if (option && confidence === 'low' && isMeaningfulTranscript(transcript)) {
-      pendingIntentRef.current = {
-        kind: 'confirm-match',
-        option,
-        transcript,
-      }
-      speakThenListen(CONFIRM_PROMPT(transcript), handleVoiceInput)
-      return
-    }
-
-    advanceWithChoice(option, transcript)
-  }
-
-  function advanceWithChoice(
-    option: StoryOption | null,
-    transcript: string,
-  ) {
-    const engine = storyEngineRef.current
-    if (!engine) return
-    if (!sttSupported && !option) return
-    if (option) {
-      engine.registerChoice(option.label, transcript)
-      fallbackAttemptsRef.current = 0
-      setCurrentBeat(null)
-      void generateStep()
-      return
-    }
-    fallbackAttemptsRef.current += 1
-    const beat = engine.beat
-    if (fallbackAttemptsRef.current >= 2 && beat && beat.options.length > 0) {
-      speakThenListen(FALLBACK_MESSAGE_2, handleVoiceInput)
-      return
-    }
-    speakThenListen(FALLBACK_MESSAGE_1, handleVoiceInput)
-  }
-
-  function recoverAfterStall(retry: boolean) {
-    if (recoveryRef.current) {
-      speakThenListen(
-        'Il telefonino è un po\u2019 stanco per raccontare adesso. Riprova tra poco, oppure scegli con i pulsanti sullo schermo.',
-        handleVoiceInput,
-      )
-      return
-    }
-    recoveryRef.current = true
-    llmEngine.destroyWorker()
-    llmEngine.load(
-      (status) => {
-        if (status.phase === 'ready') {
-          void generateStep(retry)
-        }
-        if (status.phase === 'error') {
-          speakThenListen(GENERIC_ERROR_MESSAGE, handleVoiceInput)
-        }
-      },
-      engineKindRef.current === 'webgpu' ? modelIdRef.current : undefined,
-    )
-  }
-
-  const modelIdRef = useRef('')
-
-  async function generateStep(retry = false) {
-    const engine = storyEngineRef.current
-    if (!engine) return
-    setOrbState('loading')
-    const { messages } = retry
-      ? engine.retryMessages()
-      : engine.nextStepMessages()
-    const timeoutMs =
-      engineKindRef.current === 'openrouter'
-        ? OPENROUTER_FIRST_TOKEN_TIMEOUT_MS
-        : FIRST_TOKEN_TIMEOUT_MS
-    let firstTokenSeen = false
-    const watchdog = window.setTimeout(() => {
-      const busy =
-        engineKindRef.current === 'openrouter'
-          ? openRouterRef.current?.isGenerating
-          : llmEngine.isGenerating
-      if (!firstTokenSeen && busy) {
-        if (engineKindRef.current === 'openrouter') {
-          openRouterRef.current?.cancel()
-          speakThenListen(GENERIC_ERROR_MESSAGE, handleVoiceInput)
-          return
-        }
-        llmEngine.destroyWorker()
-        recoveryRef.current = true
-        setLlmStatus({ phase: 'idle' })
-        recoverAfterStall(retry)
-      }
-    }, timeoutMs)
-    try {
-      const raw = await generateText(messages)
-      window.clearTimeout(watchdog)
-      const parsed = parseStoryBeat(raw, engine.isFinalStep)
-      if (!parsed.ok) {
-        speakThenListen(GENERIC_ERROR_MESSAGE, handleVoiceInput)
-        return
-      }
-      engine.setBeat(parsed.beat)
-      setCurrentBeat(parsed.beat)
-      const isEnd = parsed.beat.isStoryEnd || engine.isFinalStep
-      const text = isEnd
-        ? parsed.beat.narration
-        : `${parsed.beat.narration} ${parsed.beat.choicePrompt}`
-      if (speechSynthesizer.isSpeaking) {
-        speechSynthesizer.speak(text, {
-          onEnd: () => {
-            if (isEnd) setScreen('ended')
-            if (!sttSupported) return
-            window.setTimeout(() => {
-              if (!pausedRef.current && !listeningRef.current && screenRef.current === 'story') {
-                startListening(handleVoiceInput)
-              }
-            }, 700)
-          },
-        })
-        return
-      }
-      speakThenListen(text, handleVoiceInput, () => {
-        if (isEnd) setScreen('ended')
-      })
-    } catch {
-      window.clearTimeout(watchdog)
-      speakThenListen(GENERIC_ERROR_MESSAGE, handleVoiceInput)
-    }
-  }
-
-  function handleThemeInput(transcript: string) {
-    const engine = storyEngineRef.current
-    if (!engine) {
-      setOrbState('idle')
-      return
-    }
-    if (!isMeaningfulTranscript(transcript) && transcript.trim().length < 3) {
-      speakThenListen(
-        'Ti ascolto! Dimmi pure: di cosa vuoi la storia?',
-        handleThemeInput,
-        undefined,
-        { silenceMs: 4500 },
-      )
-      return
-    }
-    const normalized = transcript.toLowerCase().trim()
-    const wantsAuto =
-      normalized === 'scegli tu' ||
-      normalized === 'scegli' ||
-      normalized.includes('decidi tu') ||
-      normalized.includes('fai tu')
-    engine.setTheme(wantsAuto ? '' : transcript.trim())
-    setOrbState('loading')
-    void generateTitle()
-  }
-
-  async function generateTitle() {
-    const engine = storyEngineRef.current
-    if (!engine) return
-    const messages = engine.titleMessages()
-    const timeoutMs =
-      engineKindRef.current === 'openrouter'
-        ? OPENROUTER_FIRST_TOKEN_TIMEOUT_MS
-        : FIRST_TOKEN_TIMEOUT_MS
-    let firstTokenSeen = false
-    const watchdog = window.setTimeout(() => {
-      const busy =
-        engineKindRef.current === 'openrouter'
-          ? openRouterRef.current?.isGenerating
-          : llmEngine.isGenerating
-      if (firstTokenSeen || !busy) return
+  const generateText = useCallback(
+    async (messages: ChatMessage[]): Promise<string> => {
       if (engineKindRef.current === 'openrouter') {
-        openRouterRef.current?.cancel()
-        speakThenListen(GENERIC_ERROR_MESSAGE, () => handleThemeInput(''))
-        return
+        return openRouterRef.current!.generate(messages)
       }
-      llmEngine.destroyWorker()
-      recoveryRef.current = true
-      setLlmStatus({ phase: 'idle' })
-      llmEngine.load(
-        (status) => {
-          if (status.phase === 'ready') {
-            void generateTitle()
-          }
-          if (status.phase === 'error') {
-            speakThenListen(GENERIC_ERROR_MESSAGE, () => handleThemeInput(''))
-          }
-        },
-        modelIdRef.current,
-      )
-    }, timeoutMs)
-    try {
-      const raw = await generateText(messages, {
-        onFirstToken: () => {
-          firstTokenSeen = true
-          window.clearTimeout(watchdog)
-        },
-      })
-      window.clearTimeout(watchdog)
-      const parsed = parseTitle(raw)
-      if (!parsed.ok) {
-        speakThenListen(GENERIC_ERROR_MESSAGE, () => handleThemeInput(''))
-        return
-      }
-      engine.setTitle(parsed.title)
-      setStoryTitle(parsed.title)
-      setScreen('story')
-      void generateStep()
-      speakThenListen(
-        `${TITLE_ANNOUNCEMENT(parsed.title)} ${WELCOME_MESSAGE}`,
-        handleVoiceInput,
-        undefined,
-        { listenAfter: false },
-      )
-    } catch {
-      window.clearTimeout(watchdog)
-      speakThenListen(GENERIC_ERROR_MESSAGE, () => handleThemeInput(''))
-    }
-  }
+      if (!llmEngineRef.current) throw new Error('no-engine')
+      return llmEngineRef.current.generate(messages)
+    },
+    [],
+  )
 
-  const startModelLoad = useCallback((modelId: string) => {
-    engineKindRef.current = 'webgpu'
-    modelIdRef.current = modelId
-    recoveryRef.current = false
-    setLlmStatus({ phase: 'loading', progress: 0, text: '' })
-    llmEngine.load(
-      (status) => {
-        setLlmStatus(status)
-        if (status.phase === 'ready') {
-          setScreen('age-selection')
-        }
-      },
-      modelId,
-    )
+  const refreshCacheInfo = useCallback(async () => {
+    for (const model of MODEL_OPTIONS) {
+      const cached = await isModelCached(model.id)
+      if (cached) {
+        const size = await estimateCacheSize()
+        setCacheInfo({ modelId: model.id, cached: true, size })
+        return
+      }
+    }
+    const size = await estimateCacheSize()
+    setCacheInfo({ modelId: DEFAULT_MODEL_ID, cached: false, size })
   }, [])
 
-  const startOpenRouter = useCallback((apiKey: string) => {
+  useEffect(() => {
+    if (engineKind === 'webgpu') {
+      void refreshCacheInfo()
+    }
+  }, [engineKind, refreshCacheInfo])
+
+  const speakChapter = useCallback((chapter: Chapter) => {
+    speechSynthesizer.cancel()
+    setIsSpeaking(true)
+    speechSynthesizer.speakSafely(chapter.content, {
+      onStart: () => setIsSpeaking(true),
+      onEnd: () => setIsSpeaking(false),
+    })
+  }, [])
+
+  async function generateNextChapter(): Promise<void> {
+    const group = ageGroupRef.current
+    if (!group || isGenerating) return
+    const nextIndex = chaptersRef.current.length
+    if (nextIndex >= TOTAL_CHAPTERS) return
+    const chapter = HERO_JOURNEY[nextIndex]
+    setIsGenerating(true)
+    setGenerationError('')
+    abortRef.current = false
+    const watchdog = window.setTimeout(() => {
+      if (!abortRef.current) {
+        openRouterRef.current?.cancel()
+        llmEngineRef.current?.destroyWorker()
+      }
+    }, FIRST_TOKEN_TIMEOUT_MS)
+    try {
+      const messages = buildChapterMessages({
+        ageGroup: group,
+        title: titleRef.current,
+        theme: themeRef.current,
+        chapter,
+        previousChapters: chaptersRef.current,
+      })
+      const raw = await generateText(messages)
+      window.clearTimeout(watchdog)
+      if (abortRef.current) return
+      const parsed = parseChapter(raw)
+      if (!parsed.ok) {
+        reportGenerationError()
+        return
+      }
+      generationErrorRef.current = 0
+      const newChapter = { title: chapter.title, content: parsed.content }
+      chaptersRef.current = [...chaptersRef.current, newChapter]
+      setChapters(chaptersRef.current)
+      setCurrentChapter(newChapter)
+      speakChapter(newChapter)
+    } catch {
+      window.clearTimeout(watchdog)
+      if (!abortRef.current) reportGenerationError()
+    } finally {
+      setIsGenerating(false)
+    }
+  }
+
+  function reportGenerationError() {
+    generationErrorRef.current += 1
+    if (generationErrorRef.current >= MAX_CONSECUTIVE_GENERATION_ERRORS) {
+      generationErrorRef.current = 0
+      setGenerationError(GENERATION_STUCK_MESSAGE)
+      speechSynthesizer.speakSafely(GENERATION_STUCK_MESSAGE)
+      return
+    }
+    setGenerationError(GENERIC_ERROR_MESSAGE)
+    speechSynthesizer.speakSafely(GENERIC_ERROR_MESSAGE)
+  }
+
+  async function generateTitleStory(): Promise<void> {
+    const group = ageGroupRef.current
+    if (!group || isGenerating) return
+    setIsGenerating(true)
+    setGenerationError('')
+    abortRef.current = false
+    try {
+      const raw = await generateText(buildTitleMessages(group, themeRef.current))
+      if (abortRef.current) return
+      const parsed = parseTitle(raw)
+      if (!parsed.ok) {
+        reportGenerationError()
+        return
+      }
+      generationErrorRef.current = 0
+      titleRef.current = parsed.title
+      setStoryTitle(parsed.title)
+      setScreen('story')
+      speechSynthesizer.speakSafely(
+        `Che bello! La storia si intitola: ${parsed.title}. Ascolta...`,
+        { onEnd: () => void generateNextChapter() },
+      )
+    } catch {
+      if (!abortRef.current) reportGenerationError()
+    } finally {
+      setIsGenerating(false)
+    }
+  }
+
+  const handleStartModelLoad = useCallback((modelId: string) => {
+    engineKindRef.current = 'webgpu'
+    modelIdRef.current = modelId
+    setEngineKind('webgpu')
+    setLlmStatus({ phase: 'loading', progress: 0, text: '' })
+    const engine = new LlmEngine()
+    llmEngineRef.current = engine
+    engine.load((status) => {
+      setLlmStatus(status)
+      if (status.phase === 'ready') setScreen('age-selection')
+    }, modelId)
+  }, [])
+
+  const handleStartOpenRouter = useCallback((apiKey: string) => {
     engineKindRef.current = 'openrouter'
+    setEngineKind('openrouter')
     openRouterRef.current = new OpenRouterEngine({ apiKey })
     setLlmStatus({ phase: 'ready' })
     setScreen('age-selection')
   }, [])
 
-  const handleAgeSelection = useCallback((group: AgeGroup) => {
-    const engine = new StoryEngine(group, '')
-    storyEngineRef.current = engine
-    fallbackAttemptsRef.current = 0
+  const handleAgeSelect = useCallback((group: AgeGroup) => {
+    ageGroupRef.current = group
+    setAgeGroup(group)
     setScreen('theme')
-    speakThenListen(THEME_PROMPT, handleThemeInput, undefined, {
-      silenceMs: 4500,
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [speakThenListen])
-
-  const handleThemeButton = useCallback((theme: string) => {
-    micSessionRef.current += 1
-    speechRecognizer.abort()
-    listeningRef.current = false
-    handleThemeInput(theme)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const handleToggle = useCallback(() => {
-    if (screenRef.current !== 'story' && screenRef.current !== 'theme') return
-    if (speechRecognizer.isActive) {
-      pausedRef.current = true
-      micSessionRef.current += 1
-      speechRecognizer.abort()
-      listeningRef.current = false
-      playListenCue('listening-off')
-      setOrbState('idle')
-      return
-    }
-    if (speechSynthesizer.isSpeaking) return
-    if (llmEngine.isGenerating || openRouterRef.current?.isGenerating) return
-    pausedRef.current = false
-    if (screenRef.current === 'theme') {
-      startListening(handleThemeInput)
-    } else {
-      startListening(handleVoiceInput)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [startListening])
-
-  useVoiceShortcut({
-    enabled: screen === 'story' || screen === 'theme',
-    onToggle: handleToggle,
-  })
-
-  const handleChoiceButton = useCallback((option: StoryOption) => {
-    const engine = storyEngineRef.current
-    if (!engine || screenRef.current !== 'story') return
-    micSessionRef.current += 1
-    speechRecognizer.abort()
-    listeningRef.current = false
-    pausedRef.current = false
-    pendingIntentRef.current = null
-    setLastTranscript(option.label)
-    advanceWithChoice(option, option.label)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  const handleThemeSelect = useCallback(
+    (selected: string) => {
+      const chosen =
+        selected === 'scegli tu' ? '' : selected
+      themeRef.current = chosen
+      setTheme(chosen)
+      setScreen('story')
+      titleRef.current = ''
+      chaptersRef.current = []
+      setChapters([])
+      setCurrentChapter(null)
+      void generateTitleStory()
+    },
+    [],
+  )
 
   const handleRestart = useCallback(() => {
-    micSessionRef.current += 1
-    speechSynthesizer.cancel()
-    speechRecognizer.abort()
+    abortRef.current = true
     openRouterRef.current?.cancel()
-    storyEngineRef.current = null
-    setCurrentBeat(null)
-    setLastTranscript('')
+    speechSynthesizer.cancel()
+    setIsSpeaking(false)
+    setIsGenerating(false)
+    generationErrorRef.current = 0
+    titleRef.current = ''
+    chaptersRef.current = []
+    themeRef.current = ''
     setStoryTitle('')
-    fallbackAttemptsRef.current = 0
-    pendingIntentRef.current = null
-    pausedRef.current = false
-    listeningRef.current = false
-    setOrbState('idle')
+    setChapters([])
+    setCurrentChapter(null)
+    setGenerationError('')
     setScreen('age-selection')
   }, [])
 
-  const quickThemes = ['dinosauri', 'principesse', 'spazio', 'scegli tu']
+  const handleDeleteCache = useCallback(async () => {
+    setCacheBusy(true)
+    const cached = MODEL_OPTIONS.map((m) => m.id)
+    for (const modelId of cached) {
+      await deleteModelFromCache(modelId)
+    }
+    await refreshCacheInfo()
+    setCacheBusy(false)
+  }, [refreshCacheInfo])
+
+  const chapterIndex = chapters.length
+  const isLastChapter = chapterIndex >= TOTAL_CHAPTERS
 
   return (
-    <main className="flex min-h-[100dvh] flex-col items-center justify-center gap-6 bg-slate-950 px-4 py-8 text-slate-100 sm:gap-8 sm:px-6 sm:py-12">
-      <header className="text-center">
-        <h1 className="text-4xl font-bold tracking-tight">Raccontastorie</h1>
-        <p className="mt-2 text-sm text-slate-400">
-          Il tuo narratore interattivo a bivi
+    <main className="flex min-h-dvh flex-col items-center justify-between gap-6 px-4 py-6">
+      <header className="flex w-full max-w-xl flex-col items-center gap-2 text-center">
+        <h1 className="text-2xl font-bold text-slate-100">Raccontastorie</h1>
+        <p className="text-sm text-slate-400">
+          Il tuo narratore di favole interattivo
         </p>
-      </header>
-
-      {screen === 'onboarding' && (
-        <ModelOnboarding
-          status={llmStatus}
-          onStart={startModelLoad}
-          onOpenRouterStart={startOpenRouter}
-        />
-      )}
-
-      {screen === 'age-selection' && (
-        <AgeSelector onSelect={handleAgeSelection} />
-      )}
-
-      {screen === 'theme' && (
-        <div className="flex max-w-xl flex-col items-center gap-6 text-center">
-          <AudioOrb
-            state={orbState}
-            onToggle={handleToggle}
-            disabled={false}
-          />
-          <p className="max-w-md text-lg text-slate-200" aria-live="polite">
-            Su cosa vorresti che ti raccontassi una storia?
+        {ageGroup && screen !== 'onboarding' && (
+          <p className="text-xs text-slate-500">
+            Fascia d'età: {AGE_STYLES[ageGroup].label}
+            {theme.length > 0 ? ` · tema: ${theme}` : ''}
           </p>
-          <div className="flex flex-wrap items-center justify-center gap-3">
-            {quickThemes.map((theme) => (
-              <button
-                key={theme}
-                type="button"
-                onClick={() => handleThemeButton(theme)}
-                className="rounded-full border border-slate-600 bg-slate-800/80 px-5 py-2 text-sm text-slate-100 transition hover:border-emerald-400/60 hover:bg-slate-800 focus:outline-none focus-visible:ring-4 focus-visible:ring-emerald-300/40 active:scale-[0.98]"
-              >
-                {theme}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {(screen === 'story' || screen === 'ended') && (
-        <>
-          {storyTitle.length > 0 && (
-            <p className="max-w-md text-center text-lg font-semibold text-indigo-300">
-              «{storyTitle}»
+        )}
+        {cacheInfo && engineKind === 'webgpu' && (
+          <div className="mt-2 flex w-full flex-col items-center gap-2 rounded-lg border border-slate-700 bg-slate-900/60 px-4 py-3">
+            <p className="text-xs text-slate-400">
+              Modello locale{' '}
+              {cacheInfo.cached ? 'in cache' : 'non scaricato'} —{' '}
+              {formatBytes(cacheInfo.size)} usati dal browser
             </p>
-          )}
-          {!sttSupported && (
-            <p
-              className="max-w-md rounded-lg border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-center text-sm text-amber-200"
-              role="alert"
-            >
-              Questo browser non supporta il riconoscimento vocale. Puoi
-              comunque giocare toccando i pulsanti delle scelte.
-            </p>
-          )}
-          <AudioOrb
-            state={orbState}
-            onToggle={handleToggle}
-            disabled={screen === 'ended'}
-          />
-          {currentBeat && !currentBeat.isStoryEnd && (
-            <ChoiceButtons
-              options={currentBeat.options}
-              onChoose={handleChoiceButton}
-              disabled={
-                !sttSupported
-                  ? false
-                  : orbState === 'speaking' || orbState === 'loading'
-              }
-            />
-          )}
-          {lastTranscript.length > 0 && (
-            <p
-              className="max-w-md text-center text-base text-slate-300"
-              aria-live="polite"
-            >
-              «{lastTranscript}»
-            </p>
-          )}
-          {screen === 'story' && (
             <button
               type="button"
-              onClick={handleRestart}
-              className="rounded-full border border-slate-600 bg-slate-900/60 px-6 py-2 text-sm text-slate-300 transition hover:border-indigo-400/60 hover:text-slate-100 focus:outline-none focus-visible:ring-4 focus-visible:ring-indigo-300/50"
+              onClick={handleDeleteCache}
+              disabled={cacheBusy || !cacheInfo.cached}
+              className="rounded-full border border-red-400/40 px-4 py-1 text-xs text-red-300 transition hover:border-red-400 hover:text-red-200 disabled:opacity-40"
             >
-              ✨ Nuova storia
+              {cacheBusy
+                ? 'Elimino...'
+                : cacheInfo.cached
+                  ? 'Elimina modello per liberare spazio'
+                  : 'Nessun modello in cache'}
             </button>
-          )}
-          {screen === 'ended' && (
-            <div className="flex flex-col items-center gap-4 text-center">
-              <p className="text-xl font-semibold text-emerald-300">
-                La storia è finita! 🎉
-              </p>
-              <button
-                type="button"
-                onClick={handleRestart}
-                className="rounded-full bg-indigo-500 px-8 py-3 font-semibold text-white transition hover:bg-indigo-400 focus:outline-none focus-visible:ring-4 focus-visible:ring-indigo-300/50"
-              >
-                Raccontami un'altra storia
-              </button>
-            </div>
-          )}
-        </>
-      )}
+          </div>
+        )}
+      </header>
 
-      <footer className="safe-bottom text-xs text-slate-600">
-        Funziona interamente offline, nel tuo browser.
+      <section className="flex w-full max-w-xl flex-1 flex-col items-center justify-center gap-6 text-center">
+        {screen === 'onboarding' && (
+          <ModelOnboarding
+            status={llmStatus}
+            onStart={handleStartModelLoad}
+            onOpenRouterStart={handleStartOpenRouter}
+          />
+        )}
+
+        {screen === 'age-selection' && (
+          <div className="flex w-full max-w-md flex-col items-center gap-6">
+            <p className="text-lg text-slate-200">
+              Chi ascolterà la favola?
+            </p>
+            <div className="flex w-full flex-col gap-3">
+              {(Object.keys(AGE_STYLES) as AgeGroup[]).map((group) => (
+                <button
+                  key={group}
+                  type="button"
+                  onClick={() => handleAgeSelect(group)}
+                  className="rounded-2xl border border-slate-600 bg-slate-800/80 px-6 py-4 text-lg font-semibold text-slate-100 transition hover:border-emerald-400/60 hover:bg-slate-800 active:scale-[0.99]"
+                >
+                  {AGE_STYLES[group].label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {screen === 'theme' && (
+          <div className="flex w-full max-w-md flex-col items-center gap-6">
+            <p className="text-lg text-slate-200">{THEME_PROMPT}</p>
+            <div className="flex flex-wrap items-center justify-center gap-3">
+              {QUICK_THEMES.map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => handleThemeSelect(t)}
+                  className="rounded-full border border-slate-600 bg-slate-800/80 px-5 py-2 text-sm text-slate-100 transition hover:border-emerald-400/60 hover:bg-slate-800 active:scale-[0.98]"
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault()
+                const value = new FormData(e.currentTarget).get('theme')
+                if (typeof value === 'string' && value.trim().length > 0) {
+                  handleThemeSelect(value.trim())
+                }
+              }}
+              className="flex w-full max-w-sm items-center gap-2"
+            >
+              <input
+                name="theme"
+                type="text"
+                placeholder="oppure scrivi qui il tuo argomento..."
+                className="w-full rounded-full border border-slate-600 bg-slate-900 px-4 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-emerald-400/60 focus:outline-none"
+              />
+              <button
+                type="submit"
+                className="rounded-full bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400"
+              >
+                Vai
+              </button>
+            </form>
+          </div>
+        )}
+
+        {screen === 'story' && (
+          <div className="flex w-full max-w-2xl flex-col items-center gap-5">
+            {storyTitle.length > 0 && (
+              <p className="text-center text-xl font-bold text-indigo-300">
+                «{storyTitle}»
+              </p>
+            )}
+            {chapterIndex > 0 && (
+              <p className="text-xs uppercase tracking-widest text-slate-500">
+                Capitolo {chapterIndex} di {TOTAL_CHAPTERS}
+                {isLastChapter ? ' — La favola è completa!' : ''}
+              </p>
+            )}
+
+            {generationError.length > 0 && (
+              <p
+                className="max-w-md rounded-lg border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-sm text-amber-200"
+                role="alert"
+              >
+                {generationError}
+              </p>
+            )}
+
+            {isGenerating && (
+              <p className="animate-pulse text-slate-400">Sto pensando...</p>
+            )}
+
+            {currentChapter && (
+              <article className="prose prose-invert max-w-none">
+                <h2 className="text-lg font-semibold text-slate-200">
+                  {currentChapter.title}
+                </h2>
+                <p className="whitespace-pre-wrap text-left text-base leading-relaxed text-slate-300">
+                  {currentChapter.content}
+                </p>
+              </article>
+            )}
+
+            {isGenerating && currentChapter === null && storyTitle.length === 0 && (
+              <p className="text-sm text-slate-500">
+                Sto inventando il titolo...
+              </p>
+            )}
+
+            <div className="flex flex-wrap items-center justify-center gap-3">
+              {!isLastChapter && !isGenerating && (
+                <button
+                  type="button"
+                  onClick={() => void generateNextChapter()}
+                  disabled={isSpeaking}
+                  className="rounded-full bg-emerald-500 px-6 py-3 font-semibold text-slate-950 transition hover:bg-emerald-400 disabled:opacity-40"
+                >
+                  {chapterIndex === 0
+                    ? 'Inizia la favola'
+                    : 'Prossimo capitolo'}
+                </button>
+              )}
+              {isSpeaking && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    speechSynthesizer.cancel()
+                    setIsSpeaking(false)
+                  }}
+                  className="rounded-full border border-slate-600 px-6 py-3 text-slate-200 transition hover:border-indigo-400/60"
+                >
+                  ⏸ Ferma la voce
+                </button>
+              )}
+              {isLastChapter && (
+                <p className="text-emerald-300">
+                  La favola è finita! 🎉
+                </p>
+              )}
+            </div>
+
+            {chapters.length > 1 && (
+              <details className="w-full max-w-xl text-left">
+                <summary className="cursor-pointer text-sm text-slate-400">
+                  Riascolta un capitolo precedente
+                </summary>
+                <ul className="mt-3 flex flex-col gap-2">
+                  {chapters.map((c, i) => (
+                    <li key={i}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCurrentChapter(c)
+                          speakChapter(c)
+                        }}
+                        className="text-sm text-slate-300 underline decoration-slate-600 underline-offset-4 transition hover:text-slate-100"
+                      >
+                        {i + 1}. {c.title}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
+          </div>
+        )}
+      </section>
+
+      <footer className="flex w-full max-w-xl items-center justify-between text-xs text-slate-600">
+        <span>
+          {engineKind === 'webgpu'
+            ? 'Funziona nel tuo browser, i dati non lasciano il dispositivo.'
+            : 'Motore OpenRouter con la tua chiave API.'}
+        </span>
+        {screen !== 'onboarding' && screen !== 'age-selection' && (
+          <button
+            type="button"
+            onClick={handleRestart}
+            className="rounded-full border border-slate-700 px-4 py-1 text-slate-400 transition hover:border-indigo-400/60 hover:text-slate-200"
+          >
+            ✨ Nuova favola
+          </button>
+        )}
       </footer>
     </main>
   )

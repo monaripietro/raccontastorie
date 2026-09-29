@@ -39,10 +39,10 @@ export default function ModelOnboarding({
           aria-label="Nota sulla privacy"
         >
           <p className="text-xs text-emerald-200">
-            🔒 La tua privacy: il riconoscimento vocale avviene nel tuo
-            browser e non scambia dati con altri provider. Se scegli il
-            modello locale, storie e audio non lasciano mai il tuo
-            dispositivo.
+            🔒 La tua privacy: se scegli il modello locale, le storie non
+            lasciano mai il tuo dispositivo e non sono usate per allenare
+            alcun modello. La voce narrante usa il sintetizzatore del tuo
+            browser.
           </p>
         </div>
         <div className="mt-4 grid w-full grid-cols-1 gap-4 sm:grid-cols-2">
@@ -108,10 +108,8 @@ export default function ModelOnboarding({
         >
           <p className="text-xs leading-relaxed text-amber-200">
             <strong>Attenzione privacy:</strong> con OpenRouter le frasi della
-            storia vengono inviate ai loro server. Il riconoscimento vocale
-            resta in locale nel tuo browser e non scambia dati con altri
-            provider, ma i messaggi inviati al modello possono essere usati
-            per allenare i modelli gratuiti.
+            storia vengono inviate ai loro server e i messaggi inviati al
+            modello possono essere usati per allenare i modelli gratuiti.
           </p>
         </div>
         <label className="flex w-full items-start gap-3 text-left">
@@ -170,9 +168,8 @@ export default function ModelOnboarding({
       <div className="max-w-md text-center">
         <h2 className="text-2xl font-semibold">WebGPU non disponibile</h2>
         <p className="mt-3 text-sm text-slate-300">
-          Il racconto locale richiede un browser con WebGPU. Prova con una
-          versione recente di Google Chrome o Microsoft Edge su desktop o
-          Android, oppure usa OpenRouter.
+          Il racconto locale richiede Google Chrome su desktop con WebGPU,
+          oppure puoi usare OpenRouter.
         </p>
         <button
           type="button"
