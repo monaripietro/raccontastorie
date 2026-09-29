@@ -72,6 +72,8 @@ export default function App() {
   const [currentBeat, setCurrentBeat] = useState<StoryBeat | null>(null)
   const [lastTranscript, setLastTranscript] = useState('')
   const [storyTitle, setStoryTitle] = useState('')
+  const [narrationText, setNarrationText] = useState('')
+  const [storyProgress, setStoryProgress] = useState('')
   const [sttSupported, setSttSupported] = useState(() =>
     speechRecognizer.isSupported,
   )
@@ -422,6 +424,8 @@ export default function App() {
       engine.setBeat(parsed.beat)
       generationErrorRef.current = 0
       setCurrentBeat(parsed.beat)
+      setNarrationText(parsed.beat.narration)
+      setStoryProgress(`Tappa ${engine.currentStep} di ${engine.totalSteps}`)
       const isEnd = parsed.beat.isStoryEnd || engine.isFinalStep
       const text = isEnd
         ? parsed.beat.narration
@@ -525,6 +529,8 @@ export default function App() {
       }
       engine.setTitle(parsed.title)
       generationErrorRef.current = 0
+      setNarrationText('')
+      setStoryProgress('')
       setStoryTitle(parsed.title)
       setScreen('story')
       void generateStep()
@@ -630,6 +636,8 @@ export default function App() {
     openRouterRef.current?.cancel()
     storyEngineRef.current = null
     setCurrentBeat(null)
+    setNarrationText('')
+    setStoryProgress('')
     setLastTranscript('')
     setStoryTitle('')
     fallbackAttemptsRef.current = 0
@@ -695,6 +703,11 @@ export default function App() {
               «{storyTitle}»
             </p>
           )}
+          {storyProgress.length > 0 && (
+            <p className="text-center text-xs uppercase tracking-widest text-slate-500">
+              {storyProgress}
+            </p>
+          )}
           {!sttSupported && (
             <p
               className="max-w-md rounded-lg border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-center text-sm text-amber-200"
@@ -719,6 +732,14 @@ export default function App() {
                   : orbState === 'speaking' || orbState === 'loading'
               }
             />
+          )}
+          {narrationText.length > 0 && (
+            <p
+              className="max-w-md text-center text-base leading-relaxed text-slate-300"
+              aria-live="polite"
+            >
+              {narrationText}
+            </p>
           )}
           {lastTranscript.length > 0 && (
             <p
