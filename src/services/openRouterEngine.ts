@@ -1,4 +1,4 @@
-import type { ChatMessage } from './llmEngine'
+import type { ChatMessage } from '../types/story'
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 export const OPENROUTER_FREE_MODEL = 'openrouter/free'

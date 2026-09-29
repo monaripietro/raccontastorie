@@ -1,47 +1,26 @@
 export type AgeGroup = '3-5' | '6-9' | '10+'
 
-export type ChoiceMode = 'closed' | 'hybrid' | 'open'
-
-export type StoryOption = {
-  id: string
-  label: string
-  keywords: string[]
+export type HeroChapter = {
+  index: number
+  title: string
+  guidance: string
 }
 
-export type StoryBeat = {
-  narration: string
-  choicePrompt: string
-  options: StoryOption[]
-  isStoryEnd: boolean
+export type ChatMessage = {
+  role: 'system' | 'user' | 'assistant'
+  content: string
 }
 
-export type StoryPhaseId = string
-
-export type StoryPhase = {
-  id: StoryPhaseId
-  name: string
-  description: string
-}
-
-export type AgeProfile = {
+export type AgeStyle = {
   group: AgeGroup
   label: string
-  totalSteps: number
-  phases: StoryPhase[]
   styleGuide: string
-  maxSentenceWords: number
-  narrationMaxWords: number
-  choiceMode: ChoiceMode
 }
 
-export type StoryChoiceMemory = {
-  step: number
-  phase: string
-  chosenLabel: string
-  transcript: string
-}
+export type EngineKind = 'webgpu' | 'openrouter'
 
-export type StoryEngineConfig = {
-  ageGroup: AgeGroup
-  storyTheme: string
-}
+export type LlmStatus =
+  | { phase: 'idle' }
+  | { phase: 'loading'; progress: number; text: string }
+  | { phase: 'ready' }
+  | { phase: 'error'; error: string }
