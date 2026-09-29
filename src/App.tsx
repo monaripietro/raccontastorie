@@ -35,7 +35,7 @@ const THEME_PROMPT =
   'Ciao, io sono Raccontastorie! Dimmi: su cosa vorresti che ti raccontassi una storia? Puoi dirmi qualsiasi cosa, per esempio dinosauri, principesse, spazio... oppure dirmi scegli tu!'
 
 const TITLE_ANNOUNCEMENT = (title: string) =>
-  `Che bello! La storia si intitola: ${title}. Spegni la luce, e ascolta...`
+  `Che bello! La storia si intitola: ${title}. Ascolta...`
 
 const FALLBACK_MESSAGE_1 =
   'Non ti ho sentito bene. Parla quando vedi l\u2019anello verde, e dimmi cosa scegli.'
@@ -44,6 +44,11 @@ const FALLBACK_MESSAGE_2 =
 
 const GENERIC_ERROR_MESSAGE =
   'Scusa, mi sono distratto un attimo. Ripetimi cosa vuoi fare.'
+
+const GENERATION_STUCK_MESSAGE =
+  'Scusa, proprio non riesco a continuare adesso. Tocca il pulsante Nuova storia per ripartire, oppure scegli con i pulsanti sullo schermo.'
+
+const MAX_CONSECUTIVE_GENERATION_ERRORS = 3
 
 const STT_UNAVAILABLE_MESSAGE =
   'Questo browser non riesce ad ascoltare la voce. Puoi comunque giocare: tocca una delle scelte sullo schermo!'
@@ -83,6 +88,7 @@ export default function App() {
   const micSessionRef = useRef(0)
   const emptyListenRef = useRef(0)
   const everHeardSpeechRef = useRef(false)
+  const generationErrorRef = useRef(0)
 
   useEffect(() => {
     screenRef.current = screen
@@ -235,7 +241,7 @@ export default function App() {
     setLastTranscript(transcript)
     const beat = engine.beat
     if (!beat) {
-      setOrbState('idle')
+      void generateStep()
       return
     }
 
@@ -354,7 +360,7 @@ export default function App() {
           void generateStep(retry)
         }
         if (status.phase === 'error') {
-          speakThenListen(GENERIC_ERROR_MESSAGE, handleVoiceInput)
+          reportGenerationError(handleVoiceInput)
         }
       },
       engineKindRef.current === 'webgpu' ? modelIdRef.current : undefined,
@@ -362,6 +368,19 @@ export default function App() {
   }
 
   const modelIdRef = useRef('')
+
+  function reportGenerationError(onTranscript: (t: string) => void) {
+    generationErrorRef.current += 1
+    if (generationErrorRef.current >= MAX_CONSECUTIVE_GENERATION_ERRORS) {
+      generationErrorRef.current = 0
+      speechRecognizer.abort()
+      listeningRef.current = false
+      setOrbState('idle')
+      speechSynthesizer.speakSafely(GENERATION_STUCK_MESSAGE)
+      return
+    }
+    speakThenListen(GENERIC_ERROR_MESSAGE, onTranscript)
+  }
 
   async function generateStep(retry = false) {
     const engine = storyEngineRef.current
@@ -383,7 +402,7 @@ export default function App() {
       if (!firstTokenSeen && busy) {
         if (engineKindRef.current === 'openrouter') {
           openRouterRef.current?.cancel()
-          speakThenListen(GENERIC_ERROR_MESSAGE, handleVoiceInput)
+          reportGenerationError(handleVoiceInput)
           return
         }
         llmEngine.destroyWorker()
@@ -397,10 +416,11 @@ export default function App() {
       window.clearTimeout(watchdog)
       const parsed = parseStoryBeat(raw, engine.isFinalStep)
       if (!parsed.ok) {
-        speakThenListen(GENERIC_ERROR_MESSAGE, handleVoiceInput)
+        reportGenerationError(handleVoiceInput)
         return
       }
       engine.setBeat(parsed.beat)
+      generationErrorRef.current = 0
       setCurrentBeat(parsed.beat)
       const isEnd = parsed.beat.isStoryEnd || engine.isFinalStep
       const text = isEnd
@@ -425,7 +445,7 @@ export default function App() {
       })
     } catch {
       window.clearTimeout(watchdog)
-      speakThenListen(GENERIC_ERROR_MESSAGE, handleVoiceInput)
+      reportGenerationError(handleVoiceInput)
     }
   }
 
@@ -472,7 +492,7 @@ export default function App() {
       if (firstTokenSeen || !busy) return
       if (engineKindRef.current === 'openrouter') {
         openRouterRef.current?.cancel()
-        speakThenListen(GENERIC_ERROR_MESSAGE, () => handleThemeInput(''))
+        reportGenerationError(() => handleThemeInput(''))
         return
       }
       llmEngine.destroyWorker()
@@ -484,7 +504,7 @@ export default function App() {
             void generateTitle()
           }
           if (status.phase === 'error') {
-            speakThenListen(GENERIC_ERROR_MESSAGE, () => handleThemeInput(''))
+            reportGenerationError(() => handleThemeInput(''))
           }
         },
         modelIdRef.current,
@@ -500,10 +520,11 @@ export default function App() {
       window.clearTimeout(watchdog)
       const parsed = parseTitle(raw)
       if (!parsed.ok) {
-        speakThenListen(GENERIC_ERROR_MESSAGE, () => handleThemeInput(''))
+        reportGenerationError(() => handleThemeInput(''))
         return
       }
       engine.setTitle(parsed.title)
+      generationErrorRef.current = 0
       setStoryTitle(parsed.title)
       setScreen('story')
       void generateStep()
@@ -515,7 +536,7 @@ export default function App() {
       )
     } catch {
       window.clearTimeout(watchdog)
-      speakThenListen(GENERIC_ERROR_MESSAGE, () => handleThemeInput(''))
+      reportGenerationError(() => handleThemeInput(''))
     }
   }
 
@@ -603,6 +624,7 @@ export default function App() {
 
   const handleRestart = useCallback(() => {
     micSessionRef.current += 1
+    generationErrorRef.current = 0
     speechSynthesizer.cancel()
     speechRecognizer.abort()
     openRouterRef.current?.cancel()
